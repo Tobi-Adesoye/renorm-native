@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: renorm-native
+Version: 0.1.0
+Summary: Asymptotically stable neural network architectures via Renormalization Group flow.
+Author: Renorm-Native Engineering Team
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Science/Research
+Classifier: Programming Language :: Python :: 3
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Requires-Python: >=3.8
+Requires-Dist: torch>=2.0.0
+Dynamic: author
+Dynamic: classifier
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
