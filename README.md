@@ -58,7 +58,7 @@ For production clusters, we provide access to our private, closed-source hardwar
 
 To acquire commercial licensing keys, request a dedicated cluster validation run, or set up architectural co-design consulting, submit a formal request to our infrastructure gate:
 
-👉 **[Request Enterprise Access Key](mailto:licensing@renorm.ai?subject=Enterprise%20Licensing%20Inquiry%20-%20%5BCompany%20Name%5D)**
+👉 [Request Enterprise Access Key](https://github.com/Tobi-Adesoye/renorm-native/issues/new?title=Enterprise+Licensing+Inquiry+%5BCompany+Name%5D&body=Please+provide+the+following+details+for+cluster+qualification%3A%0A%0A1.+Organization+Name%3A%0A2.+Active+GPU+Count%3A%0A3.+Target+Model+Parameter+Scale%3A%0A4.+Primary+Bottleneck+%28VRAM+or+Stability%29%3A)**
 
 *Please include your organization name, active training cluster size (GPU count), and target parameter scale in your communication.*
 
