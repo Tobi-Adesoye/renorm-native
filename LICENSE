@@ -1,0 +1,22 @@
+GNU AFFERO GENERAL PUBLIC LICENSE
+                       Version 3, 19 November 2007
+
+ Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+                            PREAMBLE
+
+  The GNU Affero General Public License is a free, copyleft license for
+software and other kinds of works, specifically designed to ensure
+that when modified versions of the work are run on network servers,
+their source code is made available to the public.
+
+  DEVELOPMENT USE IS COMPLETELY OPEN. RESTRICTIVE FOR COMMERCIAL LAUNCH.
+  If you use, modify, or integrate the renorm-native architecture inside 
+  a commercial product, application, or cloud-hosted training cluster, 
+  you are legally required to open-source your entire proprietary training 
+  pipeline and model codebase under this exact same license.
+
+  To bypass this requirement, you must acquire a Commercial Enterprise License 
+  directly from the Renorm Architecture Group.
