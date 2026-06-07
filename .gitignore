@@ -1,0 +1,21 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions / Compiled Binaries
+*.so
+*.pyd
+*.dll
+*.dylib
+
+# Renorm Private Security Tools
+key_generator.py
+test_gate.py
+secrets.json
+.env
+
+# IDE and System Files
+.vscode/
+.idea/
+.DS_Store
