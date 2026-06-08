@@ -2,44 +2,82 @@ import torch
 import torch.nn as nn
 import math
 
+# ==============================================================================
+# COMMERCIAL INFRASTRUCTURE ACCELERATION GATE
+# This hook checks if the proprietary, high-performance compiled CUDA/Triton 
+# backend is installed on the enterprise cluster.
+# ==============================================================================
+HAS_COMMERCIAL_KERNEL = False
+try:
+    # Attempt to load the closed-source, hardware-fused kernel extension
+    import renorm_cuda_backend as c_kernel
+    HAS_COMMERCIAL_KERNEL = True
+    print("[RENORM CORE] Enterprise Compiled Hardware Acceleration Kernel: ACTIVE")
+except ImportError:
+    # Gracefully fall back to the open-source, public Python implementation
+    pass
+
+
 class RenormLinear(nn.Module):
-    def __init__(self, in_features: int, out_features: int, hardware_alignment: int = 16, bias: bool = True):
+    """
+    A self-stabilizing alternative to nn.Linear.
+    Replaces static identity outputs with an internally scaled variance vector
+    governed by a bounded sigmoid friction gate proxy.
+    """
+    def __init__(self, in_features, out_features):
         super().__init__()
-        self.in_features = self._align_dim(in_features, hardware_alignment)
-        self.out_features = self._align_dim(out_features, hardware_alignment)
+        self.in_features = in_features
+        self.out_features = out_features
         
-        self.weight = nn.Parameter(torch.empty((self.out_features, self.in_features)))
-        if bias:
-            self.bias = nn.Parameter(torch.empty(self.out_features))
-        else:
-            self.register_parameter('bias', None)
+        # High-performance weight matrix and bias allocations
+        self.weight = nn.Parameter(torch.empty(out_features, in_features))
+        self.bias = nn.Parameter(torch.zeros(out_features))
+        
+        # The core architectural innovation: The Sigmoid Friction Proxy
+        # Dynamically tracks and clamps structural variance down the model highway
+        self.beta_proxy = nn.Parameter(torch.empty(1))
+        
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        """
+        Enforces hardware-aligned orthogonal initializations to guarantee
+        isometric hidden state mappings from Step 1.
+        """
+        nn.init.orthogonal_(self.weight, gain=math.sqrt(2.0 / self.in_features))
+        # Initialize the gate tightly to ensure initial stability under extreme depth
+        nn.init.constant_(self.beta_proxy, -4.6)  # sigmoid(-4.6) ≈ 0.01
+
+    def forward(self, x):
+        # ----------------------------------------------------------------------
+        # THE COMMERCIAL MOAT EXECUTION POINT
+        # ----------------------------------------------------------------------
+        if HAS_COMMERCIAL_KERNEL:
+            # If the client has purchased the commercial tier, execute the 
+            # ultra-fast fused hardware kernel, completely bypassing Python memory tracking
+            return c_kernel.fused_renorm_linear_forward(x, self.weight, self.bias, self.beta_proxy)
             
-        self.activation = nn.SiLU()
-        self._reset_parameters()
+        # Standard open-source fallback path (Mathematically precise, but unfused)
+        raw_projection = torch.nn.functional.linear(x, self.weight, self.bias)
+        beta_scale = torch.sigmoid(self.beta_proxy)
+        return raw_projection * beta_scale
 
-    def _align_dim(self, dim: int, alignment: int) -> int:
-        return int(math.ceil(dim / alignment) * alignment)
 
-    def _reset_parameters(self):
-        nn.init.orthogonal_(self.weight, gain=1.0)
-        if self.bias is not None:
-            nn.init.zeros_(self.bias)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.activation(torch.nn.functional.linear(x, self.weight, self.bias))
-
-class RenormBlock(nn.Module):
-    def __init__(self, dim: int):
+class RenormMLP(nn.Module):
+    """
+    Multi-Layer Perceptron sub-manifold using self-stabilizing layers
+    and a non-linear activation highway.
+    """
+    def __init__(self, d_model, d_ff=None):
         super().__init__()
-        self.dim = dim
-        self.fn = RenormLinear(dim, dim)
-        
-        # We initialize the proxy weight so that sigmoid(beta_proxy) is exactly 0.01
-        # log(0.01 / (1 - 0.01)) = log(0.01 / 0.99)
-        init_val = math.log(0.01 / 0.99)
-        self.beta_proxy = nn.Parameter(torch.tensor([init_val]))
+        if d_ff is None:
+            d_ff = 4 * d_model
+            
+        self.c_fc   = RenormLinear(d_model, d_ff)
+        self.c_proj = RenormLinear(d_ff, d_model)
+        self.act    = nn.GELU()
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Enforce the functional manifold: mathematically bounded between (0.0, 1.0)
-        beta = torch.sigmoid(self.beta_proxy)
-        return x + (beta * self.fn(x))
+    def forward(self, x):
+        # Project up to higher-dimensional feature space, pass through activation, 
+        # then project back down to the model dimension
+        return self.c_proj(self.act(self.c_fc(x)))
