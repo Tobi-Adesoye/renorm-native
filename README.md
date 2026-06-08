@@ -50,6 +50,14 @@ from renorm import RenormTransformerLayer
 # Initialize the self-stabilizing acceleration module
 accelerated_layer = RenormTransformerLayer(dim=4096, heads=32)
 
+
+## 🎥 Video DiT Optimization (Wan2.1 / Sora-class Architectures)
+
+Video Diffusion Transformer models scale memory footprints aggressively due to long temporal-spatial sequence lengths. Traditional sequential layer configurations force heavy tensor materialization cycles back to HBM.
+
+`renorm-native` eliminates this overhead during training and fine-tuning loops by:
+1. **SRAM-Resident Execution:** Fusing post-attention normalization routines directly into linear projection inputs, preserving cache locality.
+2. **Autograd Optimization:** Reducing the memory footprint required for activation checkpointing recomputation passes by avoiding intermediate allocations.
 # Pass your intermediate tensor through the fused pipeline
 x = torch.randn(2, 4096, 4096, device="cuda")
 output = accelerated_layer(x)
