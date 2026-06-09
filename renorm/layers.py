@@ -4,9 +4,9 @@ import torch.nn as nn
 import triton
 import triton.language as tl
 
-# ──────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # TRITON AUTOTUNING MATRIX CONFIGURATION
-# ──────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 
 def get_renorm_tuning_config():
     """
@@ -14,16 +14,16 @@ def get_renorm_tuning_config():
     register allocation, and pipeline stages based on host GPU architecture.
     """
     return [
-        triton.Config({'BLOCK_SIZE_M': 64,  'BLOCK_SIZE_N': 64,  'num_warps': 4, 'num_stages': 2}, num_stages=2),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64,  'num_warps': 4, 'num_stages': 3}, num_stages=3),
-        triton.Config({'BLOCK_SIZE_M': 64,  'BLOCK_SIZE_N': 128, 'num_warps': 8, 'num_stages': 3}, num_stages=3),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'num_warps': 8, 'num_stages': 4}, num_stages=4),
-        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'num_warps': 8, 'num_stages': 5}, num_stages=5),
+        triton.Config({'BLOCK_SIZE_M': 64,  'BLOCK_SIZE_N': 64},  num_warps=4, num_stages=2),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64},  num_warps=4, num_stages=3),
+        triton.Config({'BLOCK_SIZE_M': 64,  'BLOCK_SIZE_N': 128}, num_warps=8, num_stages=3),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128}, num_warps=8, num_stages=4),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128}, num_warps=8, num_stages=5),
     ]
 
-# ──────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # HARDWARE-NATIVE KERNEL DEFINITIONS
-# ──────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 
 @triton.autotune(configs=get_renorm_tuning_config(), key=['M', 'N'])
 @triton.jit
@@ -59,12 +59,14 @@ def _fused_renorm_forward_kernel(
 
     # Online mean and variance tracking variables for stabilization arithmetic
     m_2 = tl.zeros((BLOCK_SIZE_M,), dtype=tl.float32)
-    weight_sum = 0.0
 
     # Unified loop streaming through hidden dimensions
     for k in range(0, tl.cdiv(K, 16)):
-        x_tile = tl.load(x_ptrs, mask=(offs_am[:, None] < M) & (offs_k[None, :] < K), other=0.0)
-        w_tile = tl.load(w_ptrs, mask=(offs_k[:, None] < K) & (offs_bn[None, :] < N), other=0.0)
+        k_offset = k * 16
+        
+        # Guarded load with accurate sliding spatial masking coordinates
+        x_tile = tl.load(x_ptrs, mask=(offs_am[:, None] < M) & ((k_offset + offs_k[None, :]) < K), other=0.0)
+        w_tile = tl.load(w_ptrs, mask=((k_offset + offs_k[:, None]) < K) & (offs_bn[None, :] < N), other=0.0)
 
         # Self-stabilization arithmetic: compute running local energy bounds
         x_sq = x_tile * x_tile
@@ -79,28 +81,31 @@ def _fused_renorm_forward_kernel(
 
     # Compute exact scale scalar inside SRAM registers
     v_scale = tl.math.rsqrt((m_2 / K) + eps)
-    
+
     # Apply register-fused stabilization factor directly onto final outputs
     offs_ym = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_yn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
     y_ptrs = Y_ptr + (offs_ym[:, None] * stride_ym + offs_yn[None, :] * stride_yn)
-    
+
+    # Store scale factors for backprop calculus
+    if pid_n == 0:
+        tl.store(Scale_ptr + offs_ym, v_scale, mask=offs_ym < M)
+
     final_output = accumulator * v_scale[:, None]
     tl.store(y_ptrs, final_output, mask=(offs_ym[:, None] < M) & (offs_yn[None, :] < N))
 
 
-# ──────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # CORE PYTORCH INTERFACE WRAPPER
-# ──────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 
 class RenormLinearFunction(torch.autograd.Function):
     """
-    Custom Autograd layer leveraging Triton execution maps with native 
+    Custom Autograd layer leveraging Triton execution maps with native
     PyTorch memory-saving tracking loops.
     """
     @staticmethod
     def forward(ctx, x, weight, bias=None, eps=1e-5):
-        # Flatten spatial-temporal configurations into clean structural batch states
         orig_shape = x.shape
         x_flat = x.view(-1, orig_shape[-1]).contiguous()
         w_flat = weight.contiguous()
@@ -112,9 +117,8 @@ class RenormLinearFunction(torch.autograd.Function):
         out = torch.empty((M, N), device=x.device, dtype=x.dtype)
         scale = torch.empty((M,), device=x.device, dtype=torch.float32)
 
-        # Launch hardware-native Triton grid map
         grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),)
-        
+
         _fused_renorm_forward_kernel[grid](
             x_flat, w_flat, out, scale,
             M, N, K,
@@ -125,7 +129,7 @@ class RenormLinearFunction(torch.autograd.Function):
         )
 
         ctx.save_for_backward(x_flat, w_flat, bias, scale)
-        
+
         if bias is not None:
             out += bias
 
@@ -136,17 +140,23 @@ class RenormLinearFunction(torch.autograd.Function):
         x_flat, w_flat, bias, scale = ctx.saved_tensors
         grad_flat = grad_output.view(-1, grad_output.shape[-1]).contiguous()
 
-        # Execute backward tracking loop
-        grad_x = grad_flat @ w_flat.t()
-        grad_w = x_flat.t() @ grad_flat
+        # 1. Scale incoming gradients back through the forward scaling factor
+        grad_scaled = grad_flat * scale[:, None]
+
+        # 2. Compute base structural gradients (Note: w_flat is shape (K, N) so we dot directly)
+        grad_x = grad_scaled @ w_flat.t()
+        grad_w = x_flat.t() @ grad_scaled
         grad_bias = grad_flat.sum(dim=0) if bias is not None else None
+
+        # 3. Apply variance tracking graph approximation to prevent gradient explosion
+        grad_x = grad_x * scale[:, None]
 
         return grad_x.view_as(x_flat), grad_w, grad_bias, None
 
 
-# ──────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # PRODUCTION-GRADE TRANSFORMER INTERFACE LAYER
-# ──────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 
 class RenormTransformerLayer(nn.Module):
     """
@@ -158,29 +168,38 @@ class RenormTransformerLayer(nn.Module):
         self.dim = dim
         self.heads = heads
         self.eps = eps
-        
+
         # Open-source API wrappers interface directly with upstream configurations
         self.qkv_proj = nn.Parameter(torch.empty(dim, 3 * dim))
         self.out_proj = nn.Parameter(torch.empty(dim, dim))
-        
+
         self.reset_parameters()
 
     def reset_parameters(self):
-        # Initialize weights with variance preservation bounds
-        nn.init.kaiming_uniform_(self.qkv_proj, a=math.sqrt(5))
-        nn.init.kaiming_uniform_(self.out_proj, a=math.sqrt(5))
+        # Initialize weights with variance preservation bounds matching custom layout
+        fan_in_qkv, _ = nn.init._calculate_fan_in_and_fan_out(self.qkv_proj.t())
+        gain = nn.init.calculate_gain('leaky_relu', math.sqrt(5))
+        std_qkv = gain / math.sqrt(fan_in_qkv)
+        bound_qkv = math.sqrt(3.0) * std_qkv
+        with torch.no_grad():
+            self.qkv_proj.uniform_(-bound_qkv, bound_qkv)
+
+        fan_in_out, _ = nn.init._calculate_fan_in_and_fan_out(self.out_proj.t())
+        std_out = gain / math.sqrt(fan_in_out)
+        bound_out = math.sqrt(3.0) * std_out
+        with torch.no_grad():
+            self.out_proj.uniform_(-bound_out, bound_out)
 
     def forward(self, x):
         """
         Executes structural tracking passes over input sequence matrices.
-         Bypasses intermediate activations to preserve VRAM limits.
+        Bypasses intermediate activations to preserve VRAM limits.
         """
         # 1. Project unified attention layouts via fused self-stabilizing matrix
         qkv = RenormLinearFunction.apply(x, self.qkv_proj, None, self.eps)
         q, k, v = torch.chunk(qkv, 3, dim=-1)
 
         # 2. Inline Standard scaled dot-product attention calculation pass
-        # (Allows integration with flash attention loops seamlessly)
         B, S, D = q.shape
         q = q.view(B, S, self.heads, D // self.heads).transpose(1, 2)
         k = k.view(B, S, self.heads, D // self.heads).transpose(1, 2)
