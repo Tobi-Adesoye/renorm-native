@@ -1,144 +1,144 @@
 import sys
 import torch
+import json
 
 class RenormKernelGateway:
     """
-    Definitive Multi-Platform Architectural Topology, Boundary & Agentic Orchestration Engine.
-    Unifies memory coalescing validation, shape-conditional state tracking, nanoscale fencing,
-    distributed 5D scaling metrics, and agentic context phase profiling.
+    All-Encompassing Declarative Topology & Memory Boundary Engine.
+    Abstracts hardware platforms into core physical constraints, eliminating the 
+    need to manually track every open-source repository release or tool update.
     """
-    def __init__(self, hardware_context: str):
-        self.hardware_context = hardware_context.lower()
-        # Persistent execution state anchors to eliminate in-flight heap fragmentation
+    def __init__(self, hardware_profile: dict = None):
+        # Defaults to generic high-performance discrete GPU properties if none provided
+        self.hw = hardware_profile or {
+            "name": "discrete_cuda",
+            "cache_line_bytes": 128,
+            "has_unified_memory": False,
+            "preferred_alignment_elements": 32,
+            "max_sram_head_dim": 8
+        }
+        # Persistent state tracking matrix to prevent dynamic in-flight heap fragmentation
         self._state_holder = {
             "active_buffer": None,
-            "fence_lock_active": False,
-            "alignment_warning_triggered": False
+            "fencing_active": False,
+            "stride_padding_applied": False
         }
 
-    def _evaluate_memory_coalescing(self, dim: int) -> tuple[bool, str]:
-        """Verifies if matrix hidden dimensions map cleanly to standard 128-byte GPU cache sectors."""
-        bytes_per_element = 4
-        total_row_bytes = dim * bytes_per_element
-        if total_row_bytes % 128 != 0:
-            return False, f"MISALIGNED STRIDE: Row width ({total_row_bytes}B) breaks 128B cache sector boundary. Potential uncoalesced read hazard."
-        return True, "COALESCED PATHWAY: Dimension maps perfectly to memory bus alignment."
-
-    def _classify_operational_bottleneck(self, batch_size: int, sequence_len: int, dim: int) -> str:
-        """Analytically isolates whether execution is bound by HBM/SRAM memory transit or Tensor Core math."""
-        if sequence_len == 1:
-            return "MEMORY_BOUND (KV_CACHE_STRIDE / HBM_BANDWIDTH)"
-        if batch_size * sequence_len < 1024:
-            return "MEMORY_BOUND (IO_BOUND_SMALL_BATCH)"
-        return "COMPUTE_BOUND (TENSOR_CORE_SATURATION)"
-
-    def _profile_agentic_phase(self, sequence_len: int, target_width: int) -> str:
-        """Identifies the operational phase of an active enterprise AI agent based on structural context token length."""
-        if sequence_len <= 128:
-            return "AGENT_TOOL_CALL_PARSING (Ultra-low latency required, minimize invocation overhead)"
-        if sequence_len >= 4096:
-            return "AGENT_LONG_CONTEXT_RAG_TRIAGE (Extreme memory pressure, prioritize KV-cache layout)"
-        return "AGENT_STANDARD_REASONING_CHAIN"
-
-    def profile_distributed_5d_scaling(self, layer_dims: dict, num_gpus: int = 1) -> dict:
-        """Analytically projects distributed VRAM boundaries and pipeline bubble overhead."""
+    def _analyze_tensor_properties(self, layer_dims: dict, sequence_len: int, batch_size: int) -> dict:
+        """Extracts immutable mathematical and physical properties from the tensor graph layout."""
         dim = layer_dims.get("dim", 512)
-        layers = layer_dims.get("layers", 32)
+        heads = layer_dims.get("heads", 1)
+        head_dim = dim // heads if heads > 0 else dim
+        bytes_per_element = 4 # Assuming standard Float32
         
-        base_weights_bytes = (dim * dim * layers * 12) * 4 
-        base_weights_gb = base_weights_bytes / (1024 ** 3)
+        row_bytes = dim * bytes_per_element
+        is_coalesced = (row_bytes % self.hw["cache_line_bytes"]) == 0
         
-        pp_stages = 4 if num_gpus >= 4 else 1
-        pipeline_bubble_fraction = (pp_stages - 1) / (pp_stages + 1) if pp_stages > 1 else 0.0
-        
+        # Operational intensity evaluation
+        total_tokens = batch_size * sequence_len
+        if sequence_len == 1:
+            intensity = "MEMORY_BOUND_DECODE"
+        elif total_tokens < 1024:
+            intensity = "MEMORY_BOUND_SMALL_BATCH"
+        else:
+            intensity = "COMPUTE_BOUND_PREFILL"
+            
+        # Agentic workload phase classification
+        if sequence_len <= 128:
+            workload_phase = "LOW_LATENCY_PARSING"
+        elif sequence_len >= 4096:
+            workload_phase = "LONG_CONTEXT_RETRIEVAL"
+        else:
+            workload_phase = "STANDARD_EXECUTION"
+
         return {
-            "estimated_model_weights_gb": round(base_weights_gb, 3),
-            "zero_stage_3_sharded_weights_gb": round(base_weights_gb / max(1, num_gpus), 3),
-            "pipeline_stages": pp_stages,
-            "theoretical_pipeline_bubble_overhead": f"{round(pipeline_bubble_fraction * 100, 1)}%"
+            "dim": dim,
+            "head_dim": head_dim,
+            "is_coalesced": is_coalesced,
+            "row_bytes": row_bytes,
+            "intensity": intensity,
+            "workload_phase": workload_phase,
+            "expected_elements": sequence_len * dim
         }
 
-    def route_execution_graph(self, layer_dims: dict, sequence_len: int, batch_size: int = 1, num_gpus: int = 1) -> dict:
-        """Evaluates geometries, profiles agent phases, locks state tracking buffers, and routes to optimum backends."""
-        target_width = layer_dims.get("dim", 512)
-        heads = layer_dims.get("heads", 1)
-        head_dim = target_width // heads if heads > 0 else target_width
-        
-        is_coalesced, alignment_telemetry = self._evaluate_memory_coalescing(target_width)
-        bottleneck = self._classify_operational_bottleneck(batch_size, sequence_len, target_width)
-        agent_phase = self._profile_agentic_phase(sequence_len, target_width)
-        distributed_metrics = self.profile_distributed_5d_scaling(layer_dims, num_gpus)
+    def process_graph(self, layer_dims: dict, sequence_len: int, batch_size: int = 1) -> dict:
+        """
+        Evaluates the immutable tensor profiles against current hardware properties, 
+        manages stateful cache memory, and issues high-level execution directives.
+        """
+        props = self._analyze_tensor_properties(layer_dims, sequence_len, batch_size)
         
         manifest = {
-            "status": "SUCCESS",
+            "status": "OPERATIONAL",
+            "hardware_target": self.hw["name"],
             "telemetry": {
-                "agent_operational_phase": agent_phase,
-                "bottleneck": bottleneck,
-                "alignment": alignment_telemetry,
-                "head_dimension": head_dim,
-                "distributed_scale_profile": distributed_metrics
+                "intensity_mode": props["intensity"],
+                "workload_phase": props["workload_phase"],
+                "memory_coalesced": props["is_coalesced"]
             },
-            "directives": []
+            "execution_directives": []
         }
 
-        # 1. Nano-Scale Execution Fencing (sub-10nm equivalent analogy)
-        if head_dim <= 8:
-            self._state_holder["fence_lock_active"] = True
-            manifest["directives"].append("⚛️ [HIGH-PRECISION FENCE LOCK ACTIVATED] Fusing operations inside contiguous SRAM cache lines.")
-            manifest["backend"] = "TRITON_NANO_FUSED"
-            return manifest
-            
-        self._state_holder["fence_lock_active"] = False
-
-        # 2. Memory Stride Alignment Hazard Enforcement (Coalesced Check)
-        if not is_coalesced:
-            self._state_holder["alignment_warning_triggered"] = True
-            manifest["directives"].append("🛡️ [STRIDE PAD ENFORCED] Enforcing standard 32-element pad tiling to align memory bus.")
+        # Directive 1: Nano-Scale Hardware Fencing
+        if props["head_dim"] <= self.hw["max_sram_head_dim"]:
+            self._state_holder["fencing_active"] = True
+            manifest["execution_directives"].append("EXECUTE_SRAM_REGISTERS_FUSED_KERNEL")
         else:
-            self._state_holder["alignment_warning_triggered"] = False
+            self._state_holder["fencing_active"] = False
 
-        # 3. Decode/Interconnect Optimization based on Agent Workload
-        if bottleneck == "MEMORY_BOUND (KV_CACHE_STRIDE / HBM_BANDWIDTH)" or agent_phase == "AGENT_LONG_CONTEXT_RAG_TRIAGE":
-            manifest["directives"].append("📥 [INTERCONNECT BYPASS] Long context / memory bound state detected. Prioritizing KV-cache layout alignment.")
+        # Directive 2: Cache Line Stride Alignment Padding
+        if not props["is_coalesced"]:
+            self._state_holder["stride_padding_applied"] = True
+            manifest["execution_directives"].append(f"ENFORCE_STRIDE_ALIGNMENT_PAD_{self.hw['preferred_alignment_elements']}")
+        else:
+            self._state_holder["stride_padding_applied"] = False
 
-        # 4. Platform Path A: Apple Silicon Unified Memory Passthrough
-        if "mlx" in self.hardware_context or "mps" in self.hardware_context:
-            manifest["backend"] = "MLX_UNIFIED_JIT"
-            manifest["directives"].append("🍏 [MLX PASSTHROUGH] Bypassing discrete hardware synchronization fences.")
-            return manifest
+        # Directive 3: High-Latency Interconnect Bypass Protection
+        if props["intensity"] == "MEMORY_BOUND_DECODE" or props["workload_phase"] == "LONG_CONTEXT_RETRIEVAL":
+            manifest["execution_directives"].append("BYPASS_DYNAMIC_COMPILER_RE_TUNING_LOCK_KV_LAYOUT")
 
-        # 5. Platform Path B: Discrete Accelerator Environments (CUDA / Triton / ROCm)
-        if any(h_type in self.hardware_context for h_type in ["cuda", "triton", "rocm", "hip"]):
-            expected_elements = sequence_len * target_width
-            current_buffer = self._state_holder["active_buffer"]
+        # Directive 4: Stateful Memory Pool Anchor (Zero In-Flight Allocation Strategy)
+        if not self.hw["has_unified_memory"]:
+            expected_el = props["expected_elements"]
+            curr_buf = self._state_holder["active_buffer"]
             
-            if current_buffer is None or current_buffer.shape[0] != expected_elements:
+            if curr_buf is None or curr_buf.shape[0] != expected_el:
                 if torch.cuda.is_available():
-                    self._state_holder["active_buffer"] = torch.zeros(expected_elements, device="cuda")
+                    self._state_holder["active_buffer"] = torch.zeros(expected_el, device="cuda")
                 else:
-                    self._state_holder["active_buffer"] = torch.zeros(expected_elements, device="cpu")
-                manifest["directives"].append(f"⚓ [BUFFER ANCHORED] Reallocated state tracking cache.")
-            
-            manifest["backend"] = "TRITON_SPEED_OF_LIGHT_FUSED" if "rocm" not in self.hardware_context else "HIP_ROCM_FUSED"
-            return manifest
+                    self._state_holder["active_buffer"] = torch.zeros(expected_el, device="cpu")
+                manifest["execution_directives"].append("ANCHOR_PERSISTENT_STATE_TRACKING_BUFFER")
+        else:
+            manifest["execution_directives"].append("LEVERAGE_UNIFIED_MEMORY_LAZY_EVALUATION")
 
-        # 6. Platform Path C: Clean Native CPU Fallback Layer
-        manifest["status"] = "FALLBACK_ACTIVE"
-        manifest["backend"] = "STANDARD_CPU_AUTOGRAD"
-        manifest["directives"].append("🔄 [CPU FALLBACK] Hardware context unmapped. Executing inside standard PyTorch loops.")
         return manifest
 
+    def export_compiler_blueprint(self, op_name: str, layer_dims: dict, sequence_len: int) -> str:
+        """
+        Generates a standardized metadata manifest. This decoupling allows downstream native 
+        compilers (C++23, Rust-Telemetry utilities, Custom Triton) to read the intent without dependencies.
+        """
+        props = self._analyze_tensor_properties(layer_dims, sequence_len, batch_size=1)
+        blueprint = {
+            "blueprint_version": "2.0.0",
+            "operation": op_name,
+            "properties": {
+                "vector_width": props["dim"],
+                "head_count": layer_dims.get("heads", 1),
+                "is_aligned_128b": props["is_coalesced"],
+                "requires_sram_fencing": props["head_dim"] <= self.hw["max_sram_head_dim"]
+            }
+        }
+        return json.dumps(blueprint, indent=2)
+
 if __name__ == "__main__":
-    print("--- 🛰️ RUNNING UNIFIED SYSTEM ORCHESTRATION GATEWAY ---")
-    gateway = RenormKernelGateway(hardware_context="cuda")
+    # Test Scenario A: Discrete Cloud Node Configuration (e.g., CUDA Cluster setup)
+    print("--- 🛰️ EVALUATING DISCRETE HARDWARE COMPILATION PATH ---")
+    cuda_gateway = RenormKernelGateway()
+    manifest_a = cuda_gateway.process_graph({"dim": 111, "heads": 3}, sequence_len=1)
+    print(json.dumps(manifest_a, indent=2))
     
-    # Simulate an agent hitting a massive long-context log parsing phase (RAG Triage)
-    manifest_run = gateway.route_execution_graph(
-        {"dim": 4096, "heads": 32, "layers": 32}, 
-        sequence_len=8192, 
-        batch_size=1, 
-        num_gpus=4
-    )
-    
-    import json
-    print(json.dumps(manifest_run, indent=2))
+    # Test Scenario B: Exporting Standard Blueprint for Native External Repositories (e.g., Mila/C++23)
+    print("\n--- 📄 EXPORTING STANDARDIZED COMPILER COMPATIBILITY BLUEPRINT ---")
+    blueprint_meta = cuda_gateway.export_compiler_blueprint("RmsNorm", {"dim": 4096, "heads": 32}, sequence_len=2048)
+    print(blueprint_meta)
