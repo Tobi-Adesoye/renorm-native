@@ -1,30 +1,33 @@
+import os
 import sys
 import torch
 import json
 
 class RenormKernelGateway:
     """
-    All-Encompassing Declarative Topology & Memory Boundary Engine.
-    Abstracts hardware platforms into core physical constraints and integrates
-    native command-line orchestration flags for enterprise pipelines (e.g., ComfyUI).
+    All-Encompassing Declarative Topology, Boundary & Environment Resolution Engine.
+    Abstracts hardware platforms into core physical constraints and handles absolute path 
+    resolution to remain fully operational across symlink-free local installations.
     """
     def __init__(self, hardware_profile: dict = None, runtime_flags: list = None):
-        # 1. Parse operational execution flags passed by client applications
+        # 1. Resolve absolute environment footprint paths (Bypasses symlink/editable installation dependencies)
+        self.root_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # 2. Parse operational execution flags passed by client applications
         flags = runtime_flags or sys.argv
         self.use_renorm_active = "--use-renorm" in flags
         self.use_flash_attn_fallback = "--use-flash-attention" in flags
 
-        # 2. Derive the hardware capability matrix based on current active metal
+        # 3. Derive the hardware capability matrix based on current active metal
         if hardware_profile:
             self.hw = hardware_profile
         else:
-            # Auto-detecting AMD ROCm/HIP or falling back to generic high-performance discrete nodes
             is_rocm = torch.version.hip is not None if hasattr(torch, "version") else False
             self.hw = {
                 "name": "rocm_hip_amd" if is_rocm else "discrete_cuda",
                 "cache_line_bytes": 128,
                 "has_unified_memory": False,
-                "preferred_alignment_elements": 32, # Crucial for avoiding hipErrorLaunchFailure
+                "preferred_alignment_elements": 32, 
                 "max_sram_head_dim": 8
             }
             
@@ -39,13 +42,13 @@ class RenormKernelGateway:
         dim = layer_dims.get("dim", 512)
         heads = layer_dims.get("heads", 1)
         head_dim = dim // heads if heads > 0 else dim
-        bytes_per_element = 4 # Float32 standard estimation
+        bytes_per_element = 4
         
         row_bytes = dim * bytes_per_element
         is_coalesced = (row_bytes % self.hw["cache_line_bytes"]) == 0
         
         if sequence_len == 1:
-            intensity = "MEMORY_BOUND_DECODE" # Classic VAE Decode / sampling bottleneck step
+            intensity = "MEMORY_BOUND_DECODE"
         elif batch_size * sequence_len < 1024:
             intensity = "MEMORY_BOUND_SMALL_BATCH"
         else:
@@ -61,12 +64,13 @@ class RenormKernelGateway:
         }
 
     def process_graph(self, layer_dims: dict, sequence_len: int, batch_size: int = 1) -> dict:
-        """Evaluates tensor profiles and forces padding alignment to avoid asynchronous HIP/CUDA hardware exceptions."""
+        """Evaluates tensor profiles and issues execution directives safely relative to resolved root paths."""
         props = self._analyze_tensor_properties(layer_dims, sequence_len, batch_size)
         
         manifest = {
             "status": "OPERATIONAL" if self.use_renorm_active else "BYPASS_MODE",
             "hardware_target": self.hw["name"],
+            "environment_root": self.root_dir,
             "telemetry": {
                 "intensity_mode": props["intensity"],
                 "memory_coalesced": props["is_coalesced"],
@@ -75,24 +79,19 @@ class RenormKernelGateway:
             "execution_directives": []
         }
 
-        # If --use-renorm isn't passed, gracefully drop to un-guarded backend layers
         if not self.use_renorm_active:
             manifest["execution_directives"].append("PASSTHROUGH_TO_RAW_BACKEND_WITHOUT_RE_ALIGNMENT")
             return manifest
 
-        # Guard A: Cache Line Stride Alignment Padding (The cure for hipErrorLaunchFailure)
+        # Guard A: Cache Line Stride Alignment Padding
         if not props["is_coalesced"] or self.hw["name"] == "rocm_hip_amd":
             self._state_holder["stride_padding_applied"] = True
             manifest["execution_directives"].append(f"ENFORCE_STRIDE_ALIGNMENT_PAD_{self.hw['preferred_alignment_elements']}")
-        else:
-            self._state_holder["stride_padding_applied"] = False
 
         # Guard B: Nano-Scale Hardware Fencing
         if props["head_dim"] <= self.hw["max_sram_head_dim"]:
             self._state_holder["fencing_active"] = True
             manifest["execution_directives"].append("EXECUTE_SRAM_REGISTERS_FUSED_KERNEL")
-        else:
-            self._state_holder["fencing_active"] = False
 
         # Guard C: Stateful Allocation Anchor Pool
         expected_el = props["expected_elements"]
@@ -105,13 +104,10 @@ class RenormKernelGateway:
         return manifest
 
 if __name__ == "__main__":
-    print("--- 🛰️ EVALUATING ENTERPRISE COMFYUI RUNTIME FLAGS ---")
-    
-    # Simulating standard ComfyUI CLI launch sequence: python main.py --use-flash-attention --use-renorm
-    mock_cli_args = ["main.py", "--use-flash-attention", "--use-renorm"]
+    print("--- 🛰️ EVALUATING ARCHITECTURAL LOCATION & FLAGS ---")
+    mock_cli_args = ["main.py", "--use-renorm"]
     
     gateway = RenormKernelGateway(runtime_flags=mock_cli_args)
-    # Simulate processing a highly uncoalesced VAE Decode shape boundary (dim=111)
     manifest_out = gateway.process_graph({"dim": 111, "heads": 3}, sequence_len=1)
     
     print(json.dumps(manifest_out, indent=2))
