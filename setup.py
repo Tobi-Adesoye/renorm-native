@@ -1,16 +1,20 @@
+"""
+Backward-compatibility setup script for renorm-native.
+Enables legacy pip installations and editable developmental links.
+"""
+
 from setuptools import setup, find_packages
 
 setup(
     name="renorm-native",
     version="1.0.0",
-    description="Deep Functional Manifolds: Systemic Corrections for Identity Residual Explosions",
-    author="Renorm Architecture Group",
-    packages=find_packages(),
+    packages=find_packages(include=["gateway", "layers", "scheduler", "loopguard"]),
     install_requires=[
         "torch>=2.0.0",
     ],
-    classifiers=[
-        "Programming Language :: Python :: 3",
-        "Topic :: Scientific/Engineering :: Artificial Intelligence",
-    ],
+    extras_require={
+        "triton": ["triton>=2.0.0"],
+        "telemetry": ["prometheus-client>=0.16.0"],
+    },
+    python_requires=">=3.9",
 )

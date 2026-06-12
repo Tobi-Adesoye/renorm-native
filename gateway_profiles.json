@@ -1,0 +1,36 @@
+{
+  "hardware_profiles": {
+    "nvidia_cuda": {
+      "cache_line_bytes": 128,
+      "alignment_strategy": "BLOCK_LEVEL_PADDING",
+      "preferred_alignment": 32
+    },
+    "amd_rocm": {
+      "cache_line_bytes": 128,
+      "alignment_strategy": "WAVE64_SECTOR_ALIGN",
+      "preferred_alignment": 64
+    },
+    "ascend_npu": {
+      "cache_line_bytes": 128,
+      "alignment_strategy": "BLOCK_LEVEL_PADDING",
+      "preferred_alignment": 32
+    }
+  },
+  "runtime_rules": [
+    {
+      "flag": "--highvram",
+      "action": "ENGAGE_RENORM_ALIGNMENT",
+      "target_pool": "SRAM_REGISTERS"
+    },
+    {
+      "flag": "--api-url",
+      "action": "ENGAGE_GATEWAY",
+      "target_pool": "COALESCED_HBM"
+    },
+    {
+      "flag": "vlm",
+      "action": "FORCE_CACHE_COALESCING",
+      "target_pool": "SRAM_REGISTERS"
+    }
+  ]
+}

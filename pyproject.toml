@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "renorm-native"
+version = "1.0.0"
+authors = [
+    { name = "Renorm-Native Authors", email = "engineering@renorm-native.ai" }
+]
+description = "Hardware-aware memory virtualization engine and fused register kernel suite for GPU-centric computing"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules"
+]
+dependencies = [
+    "torch>=2.0.0",
+]
+
+[project.optional-dependencies]
+triton = ["triton>=2.0.0"]
+telemetry = ["prometheus-client>=0.16.0"]
+
+[project.urls]
+Homepage = "https://github.com/renorm-native/renorm-native"
+Documentation = "https://github.com/renorm-native/renorm-native#readme"
+Tracker = "https://github.com/renorm-native/renorm-native/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["gateway*", "layers*", "scheduler*", "loopguard*"]

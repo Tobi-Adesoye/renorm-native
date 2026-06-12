@@ -1,3 +1,6 @@
+LICENSE
+README.md
+pyproject.toml
 setup.py
 renorm/__init__.py
 renorm/attention.py
