@@ -109,3 +109,20 @@ If you are developing for local GPU pipelines or agentic networks and are encoun
 Review our diagnostic guides in verification_suite.py.
 
 Connect your pipelines to our real-time AIOps Prometheus endpoint to track active memory allocation ratios automatically.
+
+## 🚀 Quick Start (Community Edition)
+
+```bash
+pip install renorm-native
+
+import torch
+from renorm.layers import FusedRenormLinearFunction
+
+# 1. Setup high-variance tensor structures
+X = torch.randn(32, 128) * 10.0
+W = torch.randn(128, 64)
+B = torch.randn(64)
+
+# 2. Run self-stabilizing tensor computation out-of-the-box
+output = FusedRenormLinearFunction.apply(X, W, B, 0.05)
+print("Computation Complete. Output shape:", output.shape)
