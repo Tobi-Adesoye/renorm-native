@@ -1,212 +1,169 @@
-import math
+
+import os
 import torch
 import torch.nn as nn
-import triton
-import triton.language as tl
+from torch.autograd import Function
+from typing import Tuple, Optional, Any
 
-# ──────────────────────────────────────────────────────────────────────────────
-# TRITON AUTOTUNING MATRIX CONFIGURATION
-# ──────────────────────────────────────────────────────────────────────────────
+# =====================================================================
+# TRITON GRAPH IMPLEMENTATION & COMPRESSOR OVERRIDES
+# =====================================================================
+try:
+    import triton
+    import triton.language as tl
+    HAS_TRITON = True
+except ImportError:
+    HAS_TRITON = False
 
-def get_renorm_tuning_config():
+
+if HAS_TRITON:
+    @triton.jit
+    def fused_renorm_linear_forward_kernel(
+        X_ptr, W_ptr, B_ptr, OUT_ptr,
+        stride_xm, stride_xk, stride_wk, stride_wn, stride_outm, stride_outn,
+        M, N, K, beta,
+        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr
+    ):
+        """
+        Fused Triton Kernel executing: Renorm(X) @ W + Bias
+        Bypasses HBM write operations by keeping intermediate activations on SRAM registers.
+        """
+        pid_m = tl.program_id(0)
+        pid_n = tl.program_id(1)
+
+        offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+        offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+        offs_k = tl.arange(0, BLOCK_K)
+
+        mask_m = offs_m < M
+        mask_n = offs_n < N
+
+        # 1. Accumulate channel variances in SRAM registers
+        var_accum = tl.zeros((BLOCK_M,), dtype=tl.float32)
+        for k_idx in range(0, tl.cdiv(K, BLOCK_K)):
+            k_offs = k_idx * BLOCK_K + offs_k
+            mask_k = k_offs < K
+            x_val = tl.load(X_ptr + offs_m[:, None] * stride_xm + k_offs[None, :] * stride_xk, mask=mask_m[:, None] & mask_k[None, :], other=0.0)
+            var_accum += tl.sum(x_val * x_val, axis=1)
+
+        rms = tl.sqrt(var_accum / K)
+        # Apply the mathematically bounded self-stabilizing floor (clamp with beta)
+        stabilizer = tl.maximum(rms, beta)
+
+        # 2. Compute Matrix Multiplication directly on stabilized registers
+        accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+        for k_idx in range(0, tl.cdiv(K, BLOCK_K)):
+            k_offs = k_idx * BLOCK_K + offs_k
+            mask_k = k_offs < K
+            
+            x_val = tl.load(X_ptr + offs_m[:, None] * stride_xm + k_offs[None, :] * stride_xk, mask=mask_m[:, None] & mask_k[None, :], other=0.0)
+            stabilized_x = x_val / stabilizer[:, None]
+            
+            w_val = tl.load(W_ptr + k_offs[:, None] * stride_wk + offs_n[None, :] * stride_wn, mask=mask_k[:, None] & mask_n[None, :], other=0.0)
+            accumulator += tl.dot(stabilized_x, w_val)
+
+        # Add bias vector safely in registers
+        if B_ptr is not None:
+            bias_vals = tl.load(B_ptr + offs_n, mask=mask_n, other=0.0)
+            accumulator += bias_vals[None, :]
+
+        # Stream final stabilized result back to global memory exactly once
+        out_offset = offs_m[:, None] * stride_outm + offs_n[None, :] * stride_outn
+        tl.store(OUT_ptr + out_offset, accumulator, mask=mask_m[:, None] & mask_n[None, :])
+
+
+class FusedRenormLinearFunction(Function):
     """
-    Returns hardware-adaptive configurations to optimize thread-warps,
-    register allocation, and pipeline stages based on host GPU architecture.
+    Coordinates parallel Triton registers with Python autograd mathematical operations.
     """
-    return [
-        triton.Config({'BLOCK_SIZE_M': 64,  'BLOCK_SIZE_N': 64},  num_warps=4, num_stages=2),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64},  num_warps=4, num_stages=3),
-        triton.Config({'BLOCK_SIZE_M': 64,  'BLOCK_SIZE_N': 128}, num_warps=8, num_stages=3),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128}, num_warps=8, num_stages=4),
-        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128}, num_warps=8, num_stages=5),
-    ]
+    @staticmethod
+    def forward(ctx, X: torch.Tensor, W: torch.Tensor, B: Optional[torch.Tensor], beta: float) -> torch.Tensor:
+        ctx.save_for_backward(X, W, B)
+        ctx.beta = beta
 
-# ──────────────────────────────────────────────────────────────────────────────
-# HARDWARE-NATIVE KERNEL DEFINITIONS
-# ──────────────────────────────────────────────────────────────────────────────
+        # Flatten input dims
+        X_2d = X.view(-1, X.shape[-1])
+        M, K = X_2d.shape
+        K_w, N = W.shape
+        assert K == K_w, "Dimension mismatch."
 
-@triton.autotune(configs=get_renorm_tuning_config(), key=['M', 'N'])
-@triton.jit
-def _fused_renorm_forward_kernel(
-    X_ptr, W_ptr, Y_ptr, Scale_ptr,
-    M, N, K,
-    stride_xm, stride_xk,
-    stride_wk, stride_wn,
-    stride_ym, stride_yn,
-    eps,
-    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
-    num_stages: tl.constexpr
-):
-    """
-    Fused SRAM-Resident Kernel: Executes intermediate renormalization and
-    linear projection in a single hardware execution pass to eliminate HBM materialization.
-    """
-    pid = tl.program_id(axis=0)
-    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
-    pid_m = pid % num_pid_m
-    pid_n = pid // num_pid_m
+        out = torch.empty((M, N), device=X.device, dtype=X.dtype)
 
-    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    offs_k = tl.arange(0, 16) # Base tile tracking width
+        if HAS_TRITON and X.is_cuda:
+            grid = lambda meta: (
+                triton.cdiv(M, meta["BLOCK_M"]),
+                triton.cdiv(N, meta["BLOCK_N"])
+            )
+            fused_renorm_linear_forward_kernel[grid](
+                X_2d, W, B, out,
+                X_2d.stride(0), X_2d.stride(1),
+                W.stride(0), W.stride(1),
+                out.stride(0), out.stride(1),
+                M, N, K, beta,
+                BLOCK_M=64, BLOCK_N=64, BLOCK_K=32
+            )
+        else:
+            # High-performance PyTorch compiled fallback path
+            rms = torch.sqrt(torch.mean(X_2d ** 2, dim=-1, keepdim=True))
+            stabilizer = torch.clamp(rms, min=beta)
+            stabilized_x = X_2d / stabilizer
+            
+            ctx.stabilizer = stabilizer
+            ctx.stabilized_x = stabilized_x
+            
+            out = torch.addmm(B, stabilized_x, W) if B is not None else torch.mm(stabilized_x, W)
 
-    # Allocate pointer maps
-    x_ptrs = X_ptr + (offs_am[:, None] * stride_xm + offs_k[None, :] * stride_xk)
-    w_ptrs = W_ptr + (offs_k[:, None] * stride_wk + offs_bn[None, :] * stride_wn)
+        return out.view(*X.shape[:-1], N)
 
-    # Accumulator initialization
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-
-    # Online mean and variance tracking variables for stabilization arithmetic
-    m_2 = tl.zeros((BLOCK_SIZE_M,), dtype=tl.float32)
-
-    # Unified loop streaming through hidden dimensions
-    for k in range(0, tl.cdiv(K, 16)):
-        k_offset = k * 16
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], None]:
+        X, W, B = ctx.saved_tensors
+        beta = ctx.beta
         
-        # Guarded load with accurate sliding spatial masking coordinates
-        x_tile = tl.load(x_ptrs, mask=(offs_am[:, None] < M) & ((k_offset + offs_k[None, :]) < K), other=0.0)
-        w_tile = tl.load(w_ptrs, mask=((k_offset + offs_k[:, None]) < K) & (offs_bn[None, :] < N), other=0.0)
+        grad_flat = grad_output.view(-1, grad_output.shape[-1])
+        X_flat = X.view(-1, X.shape[-1])
+        
+        rms = torch.sqrt(torch.mean(X_flat ** 2, dim=-1, keepdim=True))
+        stabilizer = torch.clamp(rms, min=beta)
+        stabilized_x = X_flat / stabilizer
 
-        # Self-stabilization arithmetic: compute running local energy bounds
-        x_sq = x_tile * x_tile
-        row_var = tl.sum(x_sq, axis=1)
-        m_2 = m_2 + row_var
+        grad_W = torch.mm(stabilized_x.t(), grad_flat)
+        grad_B = grad_flat.sum(dim=0) if B is not None else None
 
-        # Fused tensor core dot product acceleration
-        accumulator += tl.dot(x_tile, w_tile)
+        grad_stabilized = torch.mm(grad_flat, W.t())
+        mask = (rms >= beta).float()
+        
+        inner_deriv = (grad_stabilized / stabilizer) - (
+            X_flat * (grad_stabilized * X_flat).sum(dim=-1, keepdim=True) * mask
+        ) / (X_flat.shape[-1] * (stabilizer ** 3))
 
-        x_ptrs += 16 * stride_xk
-        w_ptrs += 16 * stride_wk
+        grad_X = inner_deriv.view_as(X)
 
-    # Compute exact scale scalar inside SRAM registers
-    v_scale = tl.math.rsqrt((m_2 / K) + eps)
-
-    # Apply register-fused stabilization factor directly onto final outputs
-    offs_ym = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_yn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    y_ptrs = Y_ptr + (offs_ym[:, None] * stride_ym + offs_yn[None, :] * stride_yn)
-
-    # Store scale factors for backprop calculus
-    if pid_n == 0:
-        tl.store(Scale_ptr + offs_ym, v_scale, mask=offs_ym < M)
-
-    final_output = accumulator * v_scale[:, None]
-    tl.store(y_ptrs, final_output, mask=(offs_ym[:, None] < M) & (offs_yn[None, :] < N))
+        return grad_X, grad_W, grad_B, None
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# CORE PYTORCH INTERFACE WRAPPER
-# ──────────────────────────────────────────────────────────────────────────────
-
-class RenormLinearFunction(torch.autograd.Function):
+class RenormSelfStabilizingLayer(nn.Module):
     """
-    Custom Autograd layer leveraging Triton execution maps with native
-    PyTorch memory-saving tracking loops.
+    Standard Module API exposing our self-stabilizing mathematics to PyTorch workflows.
     """
-    @staticmethod
-    def forward(ctx, x, weight, bias=None, eps=1e-5):
-        orig_shape = x.shape
-        x_flat = x.view(-1, orig_shape[-1]).contiguous()
-        w_flat = weight.contiguous()
-
-        M, K = x_flat.shape
-        K_w, N = w_flat.shape
-        assert K == K_w, "Incompatible inner tensor dimensions across linear graph"
-
-        out = torch.empty((M, N), device=x.device, dtype=x.dtype)
-        scale = torch.empty((M,), device=x.device, dtype=torch.float32)
-
-        grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),)
-
-        _fused_renorm_forward_kernel[grid](
-            x_flat, w_flat, out, scale,
-            M, N, K,
-            x_flat.stride(0), x_flat.stride(1),
-            w_flat.stride(0), w_flat.stride(1),
-            out.stride(0), out.stride(1),
-            eps
-        )
-
-        ctx.save_for_backward(x_flat, w_flat, bias, scale)
-
-        if bias is not None:
-            out += bias
-
-        return out.view(*orig_shape[:-1], N)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        x_flat, w_flat, bias, scale = ctx.saved_tensors
-        grad_flat = grad_output.view(-1, grad_output.shape[-1]).contiguous()
-
-        # 1. Scale incoming gradients back through the forward scaling factor
-        grad_scaled = grad_flat * scale[:, None]
-
-        # 2. Compute base structural gradients (Note: w_flat is shape (K, N) so we dot directly)
-        grad_x = grad_scaled @ w_flat.t()
-        grad_w = x_flat.t() @ grad_scaled
-        grad_bias = grad_flat.sum(dim=0) if bias is not None else None
-
-        # 3. Apply variance tracking graph approximation to prevent gradient explosion
-        grad_x = grad_x * scale[:, None]
-
-        return grad_x.view_as(x_flat), grad_w, grad_bias, None
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# PRODUCTION-GRADE TRANSFORMER INTERFACE LAYER
-# ──────────────────────────────────────────────────────────────────────────────
-
-class RenormTransformerLayer(nn.Module):
-    """
-    High-performance self-stabilizing Transformer block wrapper designed
-    specifically for Video DiT and consumer audio scale profiles.
-    """
-    def __init__(self, dim, heads, eps=1e-5):
+    def __init__(self, in_features: int, out_features: int, beta: float = 0.05, bias: bool = True):
         super().__init__()
-        self.dim = dim
-        self.heads = heads
-        self.eps = eps
-
-        # Open-source API wrappers interface directly with upstream configurations
-        self.qkv_proj = nn.Parameter(torch.empty(dim, 3 * dim))
-        self.out_proj = nn.Parameter(torch.empty(dim, dim))
-
+        self.in_features = in_features
+        self.out_features = out_features
+        self.beta = beta
+        
+        self.weight = nn.Parameter(torch.empty(in_features, out_features))
+        if bias:
+            self.bias = nn.Parameter(torch.zeros(out_features))
+        else:
+            self.register_parameter("bias", None)
+            
         self.reset_parameters()
 
     def reset_parameters(self):
-        # Initialize weights with variance preservation bounds matching custom layout
-        fan_in_qkv, _ = nn.init._calculate_fan_in_and_fan_out(self.qkv_proj.t())
-        gain = nn.init.calculate_gain('leaky_relu', math.sqrt(5))
-        std_qkv = gain / math.sqrt(fan_in_qkv)
-        bound_qkv = math.sqrt(3.0) * std_qkv
-        with torch.no_grad():
-            self.qkv_proj.uniform_(-bound_qkv, bound_qkv)
+        nn.init.xavier_uniform_(self.weight)
+        if self.bias is not None:
+            nn.init.zeros_(self.bias)
 
-        fan_in_out, _ = nn.init._calculate_fan_in_and_fan_out(self.out_proj.t())
-        std_out = gain / math.sqrt(fan_in_out)
-        bound_out = math.sqrt(3.0) * std_out
-        with torch.no_grad():
-            self.out_proj.uniform_(-bound_out, bound_out)
-
-    def forward(self, x):
-        """
-        Executes structural tracking passes over input sequence matrices.
-        Bypasses intermediate activations to preserve VRAM limits.
-        """
-        # 1. Project unified attention layouts via fused self-stabilizing matrix
-        qkv = RenormLinearFunction.apply(x, self.qkv_proj, None, self.eps)
-        q, k, v = torch.chunk(qkv, 3, dim=-1)
-
-        # 2. Inline Standard scaled dot-product attention calculation pass
-        B, S, D = q.shape
-        q = q.view(B, S, self.heads, D // self.heads).transpose(1, 2)
-        k = k.view(B, S, self.heads, D // self.heads).transpose(1, 2)
-        v = v.view(B, S, self.heads, D // self.heads).transpose(1, 2)
-
-        attn_out = torch.nn.functional.scaled_dot_product_attention(q, k, v)
-        attn_out = attn_out.transpose(1, 2).contiguous().view(B, S, D)
-
-        # 3. Output structural projection pass
-        return RenormLinearFunction.apply(attn_out, self.out_proj, None, self.eps)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return FusedRenormLinearFunction.apply(x, self.weight, self.bias, self.beta)
