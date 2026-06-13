@@ -1,7 +1,0 @@
-torch>=2.0.0
-
-[telemetry]
-prometheus-client>=0.16.0
-
-[triton]
-triton>=2.0.0
