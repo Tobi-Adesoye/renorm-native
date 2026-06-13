@@ -5,6 +5,12 @@ Coordinates machine allocation variables and validates corporate cryptographic l
 
 import os
 import sys
+
+# Self-bootstrapping runtime path correction to prevent environment import failures
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
 import time
 import base64
 import hmac
