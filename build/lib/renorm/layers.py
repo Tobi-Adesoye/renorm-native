@@ -155,6 +155,42 @@ class RenormLinearFunction(torch.autograd.Function):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# STANDARD PRODUCTION-GRADE LAYER WRAPPER
+# ──────────────────────────────────────────────────────────────────────────────
+
+class RenormLinear(nn.Module):
+    """
+    Standard PyTorch Module wrapper exposing the self-stabilizing Renorm operation.
+    Provides seamless replacement for traditional nn.Linear layers.
+    """
+    def __init__(self, in_features, out_features, bias=True, eps=1e-5):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.eps = eps
+        
+        self.weight = nn.Parameter(torch.empty(in_features, out_features))
+        if bias:
+            self.bias = nn.Parameter(torch.empty(out_features))
+        else:
+            self.register_parameter('bias', None)
+            
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        # Kaiming uniform initialization with custom adaptation
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.bias is not None:
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
+            bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+            nn.init.uniform_(self.bias, -bound, bound)
+
+    def forward(self, x):
+        # Weight needs transpose to form (K, N) tracking matrix internally
+        return RenormLinearFunction.apply(x, self.weight.t(), self.bias, self.eps)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # PRODUCTION-GRADE TRANSFORMER INTERFACE LAYER
 # ──────────────────────────────────────────────────────────────────────────────
 

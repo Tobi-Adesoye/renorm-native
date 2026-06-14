@@ -12,7 +12,6 @@ src/renorm/transformer.py
 src/renorm_native.egg-info/PKG-INFO
 src/renorm_native.egg-info/SOURCES.txt
 src/renorm_native.egg-info/dependency_links.txt
-src/renorm_native.egg-info/requires.txt
 src/renorm_native.egg-info/top_level.txt
 tests/test_autoscaler.py
 tests/test_forward.py

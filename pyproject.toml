@@ -4,11 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "renorm-native"
-version = "1.0.0"
+version = "1.0.1"
 description = "Native Renormalization Optimization Layers"
-dependencies = [
-    "torch>=2.0.0"
-]
+dependencies = []
 
 [tool.setuptools]
 package-dir = {"" = "src"}
