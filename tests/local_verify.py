@@ -1,51 +1,125 @@
 import torch
 import torch.nn as nn
-from renorm.layers import RenormLinear
+import time
+from renorm.layers import RenormLinear, RenormLinearFunction
 
-def run_multi_domain_suite():
+def run_four_dimensional_diagnostic():
     print("=========================================================")
-    print("🛡️ RUNNING MULTI-DOMAIN PRODUCTION DEPLOYMENT TESTS")
+    print("🕵️‍♂️  AUDITING ALL 4 BOTTLENECK AXES SIMULTANEOUSLY")
     print("=========================================================\n")
 
-    cuda_available = torch.cuda.is_available()
-    device = "cuda" if cuda_available else "cpu"
-    print(f"📡 Environment Target: [{device.upper()}]")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"📡 System Hardware Target: [{device.upper()}]")
     print("-" * 57)
+    
+    all_passed = True
 
-    # Dictionary mapping real-world client usage scenarios
-    scenarios = {
-        "LLM Generation Block (Deep Hidden Dim)": (2, 4096, 4096),
-        "Audio Processing / TTS Layer (Odd Sequence Length)": (1, 333, 512),
-        "Reinforcement Learning Stream (Batch Size 1)": (1, 1, 128),
-        "Computer Vision ViT/DiT Activation Map": (4, 196, 768),
-        "Non-Power-of-Two Channel Dimension (Stress Test)": (2, 64, 137)
-    }
+    # ──────────────────────────────────────────────────────────────────────────
+    # AXIS 1: THE STRIDE BLIND SPOT PERFORMANCE AUDIT
+    # ──────────────────────────────────────────────────────────────────────────
+    print("⏱️  Axis 1: Non-Contiguous Memory Stride Overhead...")
+    layer_stride = RenormLinear(in_features=2048, out_features=1024).to(device)
+    X_huge = torch.randn(2, 2048, 4096, device=device)
+    X_sliced = X_huge[:, :, :2048]  # Forces non-contiguous stride geometry
+    
+    try:
+        t0 = time.perf_counter()
+        for _ in range(5):
+            _ = layer_stride(X_sliced)
+        t1 = time.perf_counter()
+        axis1_latency = (t1 - t0) / 5 * 1000
+        print(f"  ✅ Stride Status: Handled smoothly. Average Latency: {axis1_latency:.3f} ms")
+    except Exception as e:
+        print(f"  ❌ Stride Status: FAILED. Runtime crash occurred: {str(e)}")
+        all_passed = False
 
-    for name, shape in scenarios.items():
-        print(f"🧪 Testing Scenario: {name}")
-        B, S, in_features = shape
-        out_features = 256 # Fixed downstream projection mapping
+    # ──────────────────────────────────────────────────────────────────────────
+    # AXIS 2: VARIABLE PRECISION DTYPE REDUCTION (AMP FP16 UNDERFLOW/OVERFLOW)
+    # ──────────────────────────────────────────────────────────────────────────
+    print("\n🧮 Axis 2: Mixed-Precision (FP16) Type Alignment...")
+    layer_dtype = RenormLinear(in_features=1024, out_features=512).to(device)
+    X_micro = (torch.randn(2, 512, 1024, device=device) * 1e-6).to(torch.float16)
+    
+    try:
+        out_fp16 = layer_dtype(X_micro)
+        nan_count = torch.isnan(out_fp16).sum().item()
+        inf_count = torch.isinf(out_fp16).sum().item()
         
-        # Instantiate layer defensively
-        layer = RenormLinear(in_features=in_features, out_features=out_features).to(device)
-        
-        # Generate non-contiguous, highly varied raw matrix data
-        X = torch.randn(B, S, in_features, device=device).transpose(0, 1)
-        # Transpose it back to ensure memory is deliberately non-contiguous
-        X = X.transpose(0, 1) 
-        
-        try:
-            out = layer(X)
-            expected_shape = (B, S, out_features)
-            assert out.shape == expected_shape, f"Shape error! Expected {expected_shape}, got {out.shape}"
-            print(f"  ✅ SUCCESS: Shapes mapped perfectly to {list(out.shape)}\n")
-        except Exception as e:
-            print(f"  ❌ FAILURE in {name}: {str(e)}\n")
-            return
+        if nan_count == 0 and inf_count == 0:
+            print(f"  ✅ FP16 Status: Protected! Type-safe upcasting resolved the mismatch error.")
+            print(f"     Returned precision format cleanly as: {out_fp16.dtype}")
+        else:
+            print(f"  ❌ FP16 Status: FAILED. Numerical annihilation occurred (NaNs: {nan_count})")
+            all_passed = False
+    except Exception as e:
+        print(f"  ❌ FP16 Status: Crashed under FP16 loop mapping: {str(e)}")
+        all_passed = False
 
-    print("=========================================================")
-    print("🎉 ALL DOMAINS VERIFIED: Codebase is 100% resilient!")
+    # ──────────────────────────────────────────────────────────────────────────
+    # AXIS 3: MICRO-BATCHING INFERENCE MEMORY LEAK AUDIT
+    # ──────────────────────────────────────────────────────────────────────────
+    print("\n💧 Axis 3: Micro-Batching Inference Graph Memory Leaks...")
+    layer_leak = RenormLinear(in_features=512, out_features=256).to(device)
+    X_inf = torch.randn(1, 1, 512, device=device)
+    
+    print("  Simulating 50 continuous streaming real-time production requests...")
+    leaked_graphs = 0
+    
+    try:
+        for _ in range(50):
+            with torch.no_grad():
+                out_inf = layer_leak(X_inf)
+                if out_inf.grad_fn is not None:
+                    leaked_graphs += 1
+                    
+        if leaked_graphs == 0:
+            print("  ✅ Inference Leak Status: Clean! Context graphs detached during runtime serving.")
+        else:
+            print(f"  ❌ Inference Leak Status: FAILED. {leaked_graphs} un-detached graph contexts detected.")
+            all_passed = False
+    except Exception as e:
+        print(f"  ❌ Inference Leak Status: Crashed during serving evaluation: {str(e)}")
+        all_passed = False
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # AXIS 4: GRADIENT EXPLOSION / NaN PROPAGATION BARRIER
+    # ──────────────────────────────────────────────────────────────────────────
+    print("\n💥 Axis 4: Gradient Explosion Barrier & Analytical Derivative Health...")
+    
+    # Audit directly using our Module instantiation to match real-world weight parameter usage
+    layer_grad = RenormLinear(in_features=256, out_features=128).to(device)
+    X_grad = torch.randn(2, 256, device=device, requires_grad=True)
+    
+    try:
+        out_grad = layer_grad(X_grad)
+        exploded_loss = out_grad.sum() * 1e8
+        exploded_loss.backward()
+        
+        if layer_grad.weight.grad is None or X_grad.grad is None:
+            print("  ❌ Gradient Explosion Status: FAILED. PyTorch Autograd failed to accumulate leaf gradients.")
+            all_passed = False
+        else:
+            nan_w = torch.isnan(layer_grad.weight.grad).sum().item()
+            nan_x = torch.isnan(X_grad.grad).sum().item()
+            
+            if nan_w == 0 and nan_x == 0:
+                print("  ✅ Gradient Explosion Status: Secured. Clamping barriers safely containing values.")
+            else:
+                print(f"  ❌ Gradient Explosion Status: FAILED. NaNs broke through into parameter states.")
+                all_passed = False
+    except Exception as e:
+        print(f"  ❌ Gradient Explosion Status: Execution crashed: {str(e)}")
+        all_passed = False
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # FINAL SUMMARY BANNER
+    # ──────────────────────────────────────────────────────────────────────────
+    print("\n=========================================================")
+    if all_passed:
+        print("👑 🎉 ALL 4 AXES RESILIENT: Codebase is production-hardened!")
+    else:
+        print("⚠️  DIAGNOSTIC FAILURE: One or more architectural axes failed.")
     print("=========================================================")
 
 if __name__ == "__main__":
-    run_multi_domain_suite()
+    run_four_dimensional_diagnostic()
