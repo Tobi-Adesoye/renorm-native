@@ -9,9 +9,6 @@ try:
 except ImportError:
     HAS_TRITON = False
 
-# ──────────────────────────────────────────────────────────────────────────────
-# PRODUCTION-GRADE 2D TUNING ENGINE (Axis 3 / Dynamic Inference Scaling)
-# ──────────────────────────────────────────────────────────────────────────────
 def get_renorm_tuning_config():
     return [
         triton.Config({'BLOCK_SIZE_M': 64,  'BLOCK_SIZE_N': 64},  num_warps=4, num_stages=2),
@@ -20,9 +17,6 @@ def get_renorm_tuning_config():
         triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128}, num_warps=8, num_stages=4),
     ]
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 2D GRID HARDWARE KERNEL (Axis 2 / High-Precision Internal Reduction)
-# ──────────────────────────────────────────────────────────────────────────────
 if HAS_TRITON:
     @triton.autotune(configs=get_renorm_tuning_config(), key=['M', 'N'])
     @triton.jit
@@ -64,7 +58,10 @@ if HAS_TRITON:
             x_ptrs += 16 * stride_xk
             w_ptrs += 16 * stride_wk
 
-        v_scale = tl.math.rsqrt((m_2 / K) + eps)
+        # Triton branch: enforce numerical floor on variance
+        var_val = m_2 / K
+        var_floor = tl.where(var_val < eps, eps, var_val)
+        v_scale = tl.math.rsqrt(var_floor + eps)
 
         offs_ym = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
         offs_yn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
@@ -76,14 +73,13 @@ if HAS_TRITON:
         final_output = accumulator * v_scale[:, None]
         tl.store(y_ptrs, final_output, mask=(offs_ym[:, None] < M) & (offs_yn[None, :] < N))
 
-# ──────────────────────────────────────────────────────────────────────────────
-# THE UNIFIED STRIDE-AGNOSTIC ADVERSARIAL-RESISTANT INTERFACE
-# ──────────────────────────────────────────────────────────────────────────────
 class RenormLinearFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, weight, bias=None, eps=1e-5):
-        # Expects weight shape: [out_features, in_features]
-        # Transpose locally to perform standard linear matrix multiplication mapping [M, K] @ [K, N]
+        ctx.x_dtype = x.dtype
+        ctx.weight_dtype = weight.dtype
+        ctx.x_shape = x.shape
+
         x_flat = x.reshape(-1, x.shape[-1])
         w_flat = weight.t() 
 
@@ -95,28 +91,31 @@ class RenormLinearFunction(torch.autograd.Function):
         is_power_of_two = ((K & (K - 1)) == 0) and (K > 0)
         strides_valid = x_flat.stride(0) >= 0 and x_flat.stride(1) >= 0 if x_flat.dim() == 2 else False
 
-        # ──────────────────────────────────────────────────────────────────────
-        # SAFE FALLBACK / CPU / PRECISION-ALIGNED ROUTE
-        # ──────────────────────────────────────────────────────────────────────
         if not HAS_TRITON or not torch.cuda.is_available() or x.device.type != 'cuda' or not is_power_of_two or not strides_valid:
             x_32 = x_flat.to(torch.float32)
             m_2 = torch.sum(x_32 * x_32, dim=1, dtype=torch.float32)
-            scale_32 = torch.rsqrt((m_2 / K) + eps)
+            
+            # MATHEMATICAL ANCHOR: Force a safe variance lower boundary.
+            # This completely shields rsqrt from exploding when scaling underflow matrices.
+            var_val = m_2 / K
+            var_floor = torch.clamp(var_val, min=eps)
+            scale_32 = torch.rsqrt(var_floor + eps)
             
             w_32 = w_flat.to(torch.float32)
             out_32 = (x_32 @ w_32) * scale_32[:, None]
-            out = out_32.to(x_flat.dtype)
             
             if bias is not None:
-                out += bias.to(out.dtype)
+                out_32 += bias.to(torch.float32)
             
-            # UNCONDITIONAL SAVE: No safety-destroying conditional guards
+            if x.dtype == torch.float16:
+                out_32 = torch.clamp(out_32, min=-65504.0, max=65504.0)
+            elif x.dtype == torch.bfloat16:
+                out_32 = torch.clamp(out_32, min=-3.38e38, max=3.38e38)
+
+            out = out_32.to(x_flat.dtype)
             ctx.save_for_backward(x_flat, weight, bias, scale_32.to(x_flat.dtype))
             return out
 
-        # ──────────────────────────────────────────────────────────────────────
-        # ADVANCED 2D HARDWARE-STRIDE ACCELERATED ROUTE
-        # ──────────────────────────────────────────────────────────────────────
         out = torch.empty((M, N), device=x.device, dtype=x.dtype)
         scale = torch.empty((M,), device=x.device, dtype=torch.float32)
 
@@ -137,7 +136,6 @@ class RenormLinearFunction(torch.autograd.Function):
         if bias is not None:
             out += bias
 
-        # UNCONDITIONAL SAVE: Autograd contexts are guaranteed safe
         ctx.save_for_backward(x_flat, weight, bias, scale.to(x_flat.dtype))
         return out
 
@@ -148,23 +146,27 @@ class RenormLinearFunction(torch.autograd.Function):
         if x_flat is None:
             return None, None, None, None
 
-        grad_flat = grad_output.reshape(-1, grad_output.shape[-1])
-        scale_clamped = torch.clamp(scale, min=1e-7, max=1e5).to(grad_flat.dtype)
+        grad_flat = grad_output.reshape(-1, grad_output.shape[-1]).to(torch.float32)
+        scale_clamped = torch.clamp(scale, min=1e-7, max=1e5).to(torch.float32)
+        x_flat_32 = x_flat.to(torch.float32)
+        weight_32 = weight.to(torch.float32)
 
         grad_scaled = grad_flat * scale_clamped[:, None]
         
-        # Pull against the un-transposed weight matrix saved securely in context
-        grad_x = grad_scaled @ weight
-        grad_w = grad_scaled.t() @ x_flat
+        grad_x = grad_scaled @ weight_32
+        grad_w = grad_scaled.t() @ x_flat_32
         
         grad_bias = grad_flat.sum(dim=0) if bias is not None else None
         grad_x = grad_x * scale_clamped[:, None]
 
-        return grad_x, grad_w, grad_bias, None
+        if ctx.x_dtype == torch.float16:
+            grad_x = torch.clamp(grad_x, min=-65504.0, max=65504.0)
+        if ctx.weight_dtype == torch.float16:
+            grad_w = torch.clamp(grad_w, min=-65504.0, max=65504.0)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# PRODUCTION DROP-IN MODULE LAYER WRAPPER
-# ──────────────────────────────────────────────────────────────────────────────
+        grad_x_reshaped = grad_x.view(ctx.x_shape)
+        return grad_x_reshaped.to(ctx.x_dtype).clone(), grad_w.to(ctx.weight_dtype).clone(), grad_bias, None
+
 class RenormLinear(nn.Module):
     def __init__(self, in_features, out_features, bias=True, eps=1e-5):
         super().__init__()
