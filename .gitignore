@@ -19,3 +19,7 @@ secrets.json
 .vscode/
 .idea/
 .DS_Store
+
+generate_license.py
+*.lic
+

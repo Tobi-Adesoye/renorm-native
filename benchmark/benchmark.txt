@@ -1,0 +1,18 @@
+
+PS C:\Users\my pc> python renorm_perf_audit.py
+C:\Python314\python.exe: can't open file 'C:\\Users\\my pc\\renorm_perf_audit.py': [Errno 2] No such file or directory
+PS C:\Users\my pc> cd "Desktop"
+PS C:\Users\my pc\Desktop> python renorm_perf_audit.py
+======================================================================
+RUNNING WORKLOAD AUDIT: STANDARD PYTORCH LINEAR (BASELINE)
+======================================================================
+-> Target Compute Hardware Node Routed to: CPU
+Execution Metric Report: {'status': 'SUCCESS', 'peak_vram_mb': '128.00 MB', 'duration_sec': '24.9523s'}
+
+======================================================================
+RUNNING WORKLOAD AUDIT: RENORM-NATIVE INFRASTRUCTURE LAYER
+======================================================================
+-> Target Compute Hardware Node Routed to: CPU
+Execution Metric Report: {'status': 'SUCCESS', 'peak_vram_mb': '128.00 MB', 'duration_sec': '24.0252s'}
+======================================================================
+PS C:\Users\my pc\Desktop>
