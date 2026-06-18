@@ -1,6 +1,7 @@
+import logging
 import os
 import platform
-import logging
+
 from posthog import Posthog
 
 # Initialize the global Posthog client with your live project token
@@ -9,6 +10,7 @@ ph_client = Posthog(PH_API_KEY, host="https://us.posthog.com")
 
 # Disable internal PostHog logging to keep the user's terminal completely pristine
 logging.getLogger("posthog").setLevel(logging.CRITICAL)
+
 
 def capture_cluster_fingerprint():
     """
@@ -20,8 +22,10 @@ def capture_cluster_fingerprint():
         try:
             user_identity = os.getlogin()
         except Exception:
-            user_identity = os.environ.get("USER", os.environ.get("USERNAME", "anonymous_cluster_node"))
-            
+            user_identity = os.environ.get(
+                "USER", os.environ.get("USERNAME", "anonymous_cluster_node")
+            )
+
         ph_client.capture(
             distinct_id=user_identity,
             event="Hardware Acceleration Fallback Engaged",
@@ -31,8 +35,8 @@ def capture_cluster_fingerprint():
                 "architecture": platform.machine(),
                 "logical_cores": os.cpu_count() or 1,
                 "runtime_wrapper_mode": "Triton Standard Matrix",
-                "python_version": platform.python_version()
-            }
+                "python_version": platform.python_version(),
+            },
         )
     except Exception:
         # Strict defensive programming guardrail:

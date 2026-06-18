@@ -1,12 +1,14 @@
-import os
-import sys
+import importlib.util
 
-try:
-    import renorm
-except ModuleNotFoundError:
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    if current_dir not in sys.path:
-        sys.path.insert(0, current_dir)
-    parent_dir = os.path.dirname(current_dir)
-    if "renorm" in os.listdir(parent_dir) and parent_dir not in sys.path:
-        sys.path.insert(0, parent_dir)
+__version__ = "1.0.1"
+
+# Optional availability check (no unused imports)
+if importlib.util.find_spec("renorm") is None:
+    raise ModuleNotFoundError("renorm package not found")
+
+from renorm.layers import RenormLinear, RenormLinearFunction
+
+__all__ = [
+    "RenormLinear",
+    "RenormLinearFunction",
+]

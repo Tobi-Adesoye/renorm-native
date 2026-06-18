@@ -10,11 +10,10 @@ src/renorm/containers.py
 src/renorm/layers.py
 src/renorm/lm.py
 src/renorm/transformer.py
-src/renorm_native.egg-info/PKG-INFO
-src/renorm_native.egg-info/SOURCES.txt
-src/renorm_native.egg-info/dependency_links.txt
-src/renorm_native.egg-info/requires.txt
-src/renorm_native.egg-info/top_level.txt
+src/renorm.egg-info/PKG-INFO
+src/renorm.egg-info/SOURCES.txt
+src/renorm.egg-info/dependency_links.txt
+src/renorm.egg-info/top_level.txt
 tests/test_adversarial_gauntlet.py
 tests/test_autoscaler.py
 tests/test_forward.py

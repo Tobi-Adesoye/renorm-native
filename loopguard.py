@@ -1,15 +1,15 @@
 """
 Renorm-Native: Agent LoopGuard Gateway (Protocol Shield)
 
-This module sanitizes, parses, and validates JSON payloads returned by local LLMs 
+This module sanitizes, parses, and validates JSON payloads returned by local LLMs
 and agent frameworks (e.g., Goose, Paperclip). It intercepts verbose conversational prose,
 corrects syntax errors on the fly, and enforces execution budgets to prevent infinite loops.
 """
 
-import re
 import json
 import logging
-from typing import Dict, Any, List, Tuple, Optional
+import re
+from typing import Any
 
 # Setup logger
 logger = logging.getLogger("Renorm-LoopGuard")
@@ -20,14 +20,15 @@ class RenormLoopGuard:
     Acts as an active boundary proxy for LLM outputs. It extracts structured
     tool-calling blocks and monitors command histories to guard against execution loops.
     """
+
     def __init__(self, max_token_window: int = 6000, max_consecutive_repeats: int = 3):
         self.max_token_window = max_token_window
         self.max_consecutive_repeats = max_consecutive_repeats
         # Matches raw JSON or JSON encapsulated inside markdown code blocks safely (using hex representation for backticks)
         self.json_block_pattern = re.compile(r"\x60{3}(?:json)?\s*(\{.*?\})\s*\x60{3}", re.DOTALL)
-        self.execution_history: List[str] = []
+        self.execution_history: list[str] = []
 
-    def sanitize_output_stream(self, raw_payload: str) -> Dict[str, Any]:
+    def sanitize_output_stream(self, raw_payload: str) -> dict[str, Any]:
         """
         Extracts, cleans, and validates structured parameter blocks from raw text streams.
         Ensures execution parameters are presented as raw dictionary elements.
@@ -43,32 +44,34 @@ class RenormLoopGuard:
             start_brace = cleaned_payload.find("{")
             end_brace = cleaned_payload.rfind("}")
             if start_brace != -1 and end_brace != -1:
-                cleaned_payload = cleaned_payload[start_brace:end_brace+1].strip()
+                cleaned_payload = cleaned_payload[start_brace : end_brace + 1].strip()
 
         # 2. Attempt parsing and error correction
         try:
             parsed_json = json.loads(cleaned_payload)
             self._record_execution(cleaned_payload)
-            
+
             return {
                 "status": "SECURE",
                 "data": parsed_json,
                 "error": None,
-                "loop_detected": self.is_loop_stalled()
+                "loop_detected": self.is_loop_stalled(),
             }
         except json.JSONDecodeError as err:
-            logger.warning(f"Malformed tool-calling syntax detected: {err}. Executing adaptive recovery.")
-            
+            logger.warning(
+                f"Malformed tool-calling syntax detected: {err}. Executing adaptive recovery."
+            )
+
             # Reconstruct structural omissions to avoid breaking tool pipeline workflows
             return {
                 "status": "RECOVERED_FALLBACK",
                 "data": {
                     "raw_response": raw_payload,
                     "directive": "REQUEST_REPARSE",
-                    "reason": str(err)
+                    "reason": str(err),
                 },
                 "error": str(err),
-                "loop_detected": False
+                "loop_detected": False,
             }
 
     def _record_execution(self, sanitized_payload: str):
@@ -84,8 +87,8 @@ class RenormLoopGuard:
         """
         if len(self.execution_history) < self.max_consecutive_repeats:
             return False
-            
-        recent_window = self.execution_history[-self.max_consecutive_repeats:]
+
+        recent_window = self.execution_history[-self.max_consecutive_repeats :]
         # If the unique set of recent serialized executions collapses to 1, a loop is confirmed
         return len(set(recent_window)) == 1
 
@@ -122,8 +125,8 @@ if __name__ == "__main__":
     # Case 2: Infinite Loop Simulation
     print("\n--- Diagnostic Case 2: Infinite Loop Detection ---")
     redundant_tool_call = '{"action": "GET_SYS_INFO", "target": "VRAM"}'
-    
+
     # Push identical calls to trigger threshold limits
     for i in range(3):
         res = guard.sanitize_output_stream(redundant_tool_call)
-        print(f"Pass {i+1} - Loop Alert status: {res['loop_detected']}")
+        print(f"Pass {i + 1} - Loop Alert status: {res['loop_detected']}")

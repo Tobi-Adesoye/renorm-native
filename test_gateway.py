@@ -1,5 +1,5 @@
 import os
-import sys
+
 from gateway import GatewayReferee
 
 print("=== RUNNING SIMULATION 1: Normal Environment ===")
@@ -10,14 +10,16 @@ referee_normal = GatewayReferee()
 assert os.path.exists("gateway_profiles.json"), "Error: Profile file should have been created!"
 
 print("\n=== RUNNING SIMULATION 2: Locked Docker/Container Environment ===")
+
+
 class MockReadOnlyReferee(GatewayReferee):
     def bootstrap_gateway(self):
         self.profile_name = "gateway_profiles.json"
         fallback_blueprint = {
             "hardware_profiles": {"default_fallback": {"cache_line_bytes": 128}},
-            "runtime_rules": [{"flag": "--highvram", "action": "ENGAGE_RENORM_ALIGNMENT"}]
+            "runtime_rules": [{"flag": "--highvram", "action": "ENGAGE_RENORM_ALIGNMENT"}],
         }
-        
+
         print("\n[Simulation] Mimicking a locked Docker directory permission block...")
         try:
             raise PermissionError("[Errno 13] Permission denied: 'gateway_profiles.json'")
@@ -26,7 +28,10 @@ class MockReadOnlyReferee(GatewayReferee):
             print("[renorm-native] Switching smoothly to internal memory-resident blueprint rails.")
             self.hardware_profile = fallback_blueprint["hardware_profiles"]
             self.runtime_rules = fallback_blueprint["runtime_rules"]
-            print("[renorm-native] Status: In-memory hardware safeguards initialized. Running silent.\n")
+            print(
+                "[renorm-native] Status: In-memory hardware safeguards initialized. Running silent.\n"
+            )
+
 
 referee_readonly = MockReadOnlyReferee()
 

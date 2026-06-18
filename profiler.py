@@ -1,11 +1,13 @@
 import json
 import os
 
+
 class WTGTelemetryBridge:
     """
     Parses native WTG (WhatTheGPU) snapshot logs to extract and interpret
     hardware-level memory-controller utilization anomalies during layer execution.
     """
+
     def __init__(self, wtg_log_path="probe_output.json"):
         self.log_path = wtg_log_path
 
@@ -13,7 +15,7 @@ class WTGTelemetryBridge:
         if not os.path.exists(self.log_path):
             return {"status": "No WTG telemetry log detected. Run wtg.exe --once to profile."}
 
-        with open(self.log_path, 'r') as f:
+        with open(self.log_path) as f:
             data = json.load(f)
 
         # Extract native WTG NVML probe fields matching v0.2.5 schema
@@ -25,7 +27,9 @@ class WTGTelemetryBridge:
         if mem_controller_util == 100 and gpu_util < 10:
             status = "⚠️ ANOMALY DETECTED: NVML Memory-Controller saturation mismatch (Driver bug identified by WTG)."
         elif mem_controller_util > 85:
-            status = "🔥 CRITICAL LOADING: Intermediate activation layers are saturating HBM boundaries."
+            status = (
+                "🔥 CRITICAL LOADING: Intermediate activation layers are saturating HBM boundaries."
+            )
         else:
             status = "✅ STABILIZED: SRAM register fusion active. Memory-bandwidth utilization within bounds."
 
@@ -33,5 +37,5 @@ class WTGTelemetryBridge:
             "gpu_utilization_pct": gpu_util,
             "memory_controller_pct": mem_controller_util,
             "allocated_vram_mib": vram_used,
-            "hardware_interpretation": status
+            "hardware_interpretation": status,
         }
