@@ -16,7 +16,6 @@ except ImportError:
 # TRITON CONFIG
 # ============================================================
 
-
 def get_renorm_tuning_config():
     return [
         triton.Config({"BLOCK_SIZE_M": 64, "BLOCK_SIZE_N": 64}, num_warps=4, num_stages=2),
@@ -100,33 +99,37 @@ if HAS_TRITON:
 
 
 # ============================================================
-# CORE LINEAR FUNCTION
+# CORE FUNCTION
 # ============================================================
 
-
 class RenormLinearFunction(torch.autograd.Function):
+
     @staticmethod
     def forward(ctx, x, weight, bias=None, eps=1e-5):
-        ctx.x_dtype = x.dtype
-        ctx.weight_dtype = weight.dtype
         ctx.x_shape = x.shape
 
-        x_flat = x.reshape(-1, x.shape[-1])
-        w_flat = weight.t()
+        x_flat = x.contiguous().reshape(-1, x.shape[-1])
+        w_flat = weight.t().contiguous()
 
         M, K = x_flat.shape
-        K_w, N = w_flat.shape
+        _, N = w_flat.shape
 
-        assert K == K_w
+        assert x_flat.shape[1] == w_flat.shape[0]
 
         is_power_of_two = (K & (K - 1)) == 0 and K > 0
+        is_cuda = x.device.type == "cuda"
 
-        if (
-            not HAS_TRITON
-            or not torch.cuda.is_available()
-            or x.device.type != "cuda"
-            or not is_power_of_two
-        ):
+        use_triton = (
+            HAS_TRITON
+            and is_cuda
+            and torch.cuda.is_available()
+            and is_power_of_two
+        )
+
+        # ====================================================
+        # CPU / NON-CUDA / SAFE FALLBACK PATH
+        # ====================================================
+        if not use_triton:
             x_32 = x_flat.to(torch.float32)
             m_2 = torch.sum(x_32 * x_32, dim=1)
 
@@ -141,14 +144,14 @@ class RenormLinearFunction(torch.autograd.Function):
                 out = out + bias.to(torch.float32)
 
             ctx.save_for_backward(x_flat, weight, bias, scale.to(x.dtype))
-            return out.to(x.dtype)
+            return out.reshape(*ctx.x_shape[:-1], N).to(x.dtype)
 
+        # ====================================================
+        # TRITON CUDA PATH
+        # ====================================================
         out = torch.empty((M, N), device=x.device, dtype=x.dtype)
         scale = torch.empty((M,), device=x.device, dtype=torch.float32)
 
-        # ============================
-        # FIXED GRID (INDENTATION SAFE)
-        # ============================
         def grid(META):
             return (
                 triton.cdiv(M, META["BLOCK_SIZE_M"]),
@@ -173,23 +176,21 @@ class RenormLinearFunction(torch.autograd.Function):
         )
 
         if bias is not None:
-            out += bias
+            out = out + bias
 
         ctx.save_for_backward(x_flat, weight, bias, scale.to(x.dtype))
-        return out
+        return out.reshape(*ctx.x_shape[:-1], N)
 
 
 # ============================================================
-# MODULE WRAPPER
+# MODULES
 # ============================================================
-
 
 class RenormLinear(nn.Module):
     def __init__(self, in_features, out_features, bias=True, eps=1e-5):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.empty(out_features, in_features))
-
         self.bias = nn.Parameter(torch.empty(out_features)) if bias else None
         self.reset_parameters()
 
@@ -202,11 +203,6 @@ class RenormLinear(nn.Module):
 
     def forward(self, x):
         return RenormLinearFunction.apply(x, self.weight, self.bias, self.eps)
-
-
-# ============================================================
-# TRANSFORMER LAYER
-# ============================================================
 
 
 class RenormTransformerLayer(nn.Module):
@@ -224,4 +220,8 @@ class RenormTransformerLayer(nn.Module):
 # EXPORTS
 # ============================================================
 
-__all__ = ["RenormLinear", "RenormLinearFunction", "RenormTransformerLayer"]
+__all__ = [
+    "RenormLinear",
+    "RenormLinearFunction",
+    "RenormTransformerLayer",
+]

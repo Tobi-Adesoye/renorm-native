@@ -4,7 +4,7 @@ Clean export layer (no side effects, no circular imports).
 Designed for safe pip install + CI + CPU/GPU environments.
 """
 
-__version__ = "1.0.1"
+__version__ = "1.1.0"
 
 import importlib
 
