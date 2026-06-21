@@ -1,81 +1,387 @@
+
+---
+
 # renorm-native
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/get-started/locally/)
-
-`renorm-native` is a hardware-aware, self-stabilizing tensor normalization layer engineered to eliminate memory fragmentation, out-of-memory (OOM) exceptions, and precision underflow crashes (`NaN` blowouts) in extreme deep learning pipelines. 
-
-Built specifically for high-context LLMs, sparse time-series anomaly detection, and low-bit quantized environments, `renorm-native` dynamically bridges the gap between raw hardware efficiency and absolute mathematical stability.
+[![PyPI version](https://img.shields.io/pypi/v/renorm-native.svg)](https://pypi.org/project/renorm-native/)
+[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-supported-EE4C2C?logo=pytorch)](https://pytorch.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 ---
 
-## ⚡ The Architecture: Dual-Path Execution Routing
+## 🚀 Overview
 
-Traditional normalization layers force sequential memory materialization back to High-Bandwidth Memory (HBM), choking under ragged sequences, non-contiguous tensor view slices, and ultra-sparse activation scales. 
+`renorm-native` is a PyTorch-compatible neural network module designed to improve numerical stability in deep learning models.
 
-`renorm-native` implements an intelligent execution router that automatically binds to optimal compute primitives depending on the target environment:
+It provides transformer-ready layers that are robust to:
 
-[ Tensor Input (Activations) ]
-                            |
-         ___________________|___________________
-        |                                       |
-(Linux + CUDA Available)              (Windows / Fallback / CPU)
-        |                                       |
-        v                                       v
-[ 2D Fused Triton Kernel ]             [ Precision-Aligned Engine ]
-- Register-level fusion                - Strict mathematical variance floor
-- Direct hardware-stride optimization   - Deep, isolated gradient memory copies
-        |_______________________________________|
-                            |
-                            v
-            [ Stable Linear Projection Output ]
+* Training instability (NaNs / exploding gradients)
+* Irregular tensor shapes and sequence lengths
+* Mixed CPU/GPU execution environments
+* Memory pressure in large-scale workloads
 
-### 1. The Micro-Mathematical Variance Anchor
-When processing highly repetitive or sparse sequences, internal activation variance can collapse toward absolute zero (1e{-}12 or lower). Standard PyTorch operators hit an arithmetic underflow here, making the reciprocal square root calculation (1 / sqrt{sigma^2 + epsilon}) skyrocket into infinity and corrupting weights with `NaN` states. We enforce a strict hardware-level micro-variance floor:
-{var_floor} = max({variance}, epsilon)
-This anchors the division scaling factor, maintaining stability across millions of continuous un-converged training iterations.
-
-### 2. Isolated Gradient Memory Unlinking (Stride and View Safety)
-During next-token autoregressive generation or rolling time-series windowing, tensors are heavily sliced, generating highly non-contiguous memory layouts. `renorm-native` isolates analytical gradient evaluation inside a clean `float32` space and returns deeply unlinked memory duplicates (`.clone()`), shielding shared parent memory blocks from graph disconnects or layout pointer overflows.
-
----
-
-## 🏆 Proven in Production
-
-* **1,000,000-Iteration Gauntlet Verified:** The engine has cleared a continuous 3.6-hour multi-domain adversarial stress suite simulating ragged LLM pre-fills, extreme scale mutations, and stride-breaking slice violations without a single crash or memory leak.
-* **Real-World VRAM Overhead Optimization:** Validated in production image/video generation clusters (ComfyUI ecosystem), `renorm-native` successfully cut baseline activation footprints in half, allowing developers on limited hardware (16GB VRAM layouts) to double their output rendering resolution without upgrading hardware components.
+It is designed to be a **drop-in architectural component** for modern deep learning pipelines.
 
 ---
 
 ## 📦 Installation
 
-Install the stable layout directly from source:
+Install from PyPI:
 
 ```bash
-git clone [https://github.com/Tobi-Adesoye/renorm-native.git](https://github.com/Tobi-Adesoye/renorm-native.git)
-cd renorm-native
-pip install --no-deps .
+pip install renorm-native
+```
 
-🚀 Quick Start
-Drop RenormLinear straight into any standard PyTorch transformer block, linear layer replacement, or custom anomaly detection architecture:
+Upgrade to latest version:
 
-Python
+```bash
+pip install --upgrade renorm-native
+```
+
+---
+
+## ⚡ Quick Start (30 seconds)
+
+### Transformer Layer Example
+
+```python
 import torch
-import torch.nn as nn
-from renorm.layers import RenormLinear
+from renorm import RenormTransformerLayer
 
-# Initialize system target (Automatically routes to custom Triton on CUDA, or safe engine on CPU/Windows)
+# Initialize layer
+layer = RenormTransformerLayer(dim=512, heads=8)
+
+# Dummy input: (batch, sequence, features)
+x = torch.randn(2, 16, 512)
+
+# Forward pass
+y = layer(x)
+
+print(y.shape)
+```
+
+### Expected Output
+
+```text
+torch.Size([2, 16, 512])
+```
+
+---
+
+## 🧠 Core API
+
+### 1. RenormTransformerLayer
+
+A lightweight transformer block with built-in normalization stability.
+
+```python
+RenormTransformerLayer(
+    dim: int,
+    heads: int,
+    eps: float = 1e-5
+)
+```
+
+#### Parameters:
+
+* `dim`: Hidden dimension size
+* `heads`: Number of attention heads
+* `eps`: Numerical stability constant
+
+---
+
+### 2. RenormLinear
+
+A stable replacement for `torch.nn.Linear`.
+
+```python
+from renorm.layers import RenormLinear
+```
+
+Example:
+
+```python
+layer = RenormLinear(256, 128)
+y = layer(torch.randn(4, 256))
+```
+
+---
+
+## ⚙️ Device Compatibility
+
+Automatically works across:
+
+* CPU (Windows / Linux / Mac)
+* CUDA (NVIDIA GPUs)
+* Mixed environments (fallback-safe execution)
+
+Example:
+
+```python
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Setup high-variance, non-contiguous ragged tensor inputs
-x = torch.randn(8, 64, 256, device=device).to(torch.bfloat16)
+layer = RenormTransformerLayer(dim=512, heads=8).to(device)
+x = torch.randn(2, 16, 512).to(device)
 
-# Initialize the self-stabilizing projection layer
-layer = RenormLinear(in_features=256, out_features=128, eps=1e-5).to(device)
+y = layer(x)
+```
 
-# Execute execution pass cleanly with zero risk of arithmetic overflow
-output = layer(x)
-print("Computation Complete. Secure Output Shape:", output.shape)
-📄 License
-This project is licensed under the MIT License - see the LICENSE file for details.
+---
+
+## 🧪 Minimal Validation Test
+
+Run this to verify installation:
+
+```bash
+python -c "from renorm import RenormTransformerLayer; print(RenormTransformerLayer(dim=256, heads=4))"
+```
+
+Expected behavior: no errors and model prints successfully.
+
+---
+
+## 🏗 Architecture Summary
+
+`renorm-native` uses a dual-path execution design:
+
+* **CUDA Path (GPU):**
+
+  * Optimized tensor execution path
+  * High-performance kernel routing (where available)
+
+* **CPU Path (Fallback):**
+
+  * Stable numerical execution engine
+  * Strict variance preservation for stability
+
+This ensures consistent behavior across heterogeneous compute environments.
+
+---
+
+## 📊 Stability Design Principles
+
+### 1. Variance Stabilization
+
+Prevents numerical collapse in deep stacks by maintaining bounded activation scaling.
+
+### 2. Memory Safety
+
+Ensures gradient computation remains isolated from unsafe tensor views in dynamic graphs.
+
+### 3. Execution Portability
+
+Same model behavior across CPU and GPU environments.
+
+---
+
+## 📌 Example Use Case
+
+* Transformer models (LLMs)
+* Time-series forecasting systems
+* Anomaly detection pipelines
+* Edge-device inference systems
+* Low-memory GPU environments
+
+---
+
+## ⚠️ Notes
+
+* Requires PyTorch ≥ 2.0
+* Python ≥ 3.10 recommended
+* CUDA optional but supported
+
+---
+
+## 📄 License
+
+MIT License — see `LICENSE` for details.
+
+---
+
+## 🤝 Contributing
+
+Contributions, issues, and improvements are welcome.
+
+---
+
+## 🔗 Project
+
+Maintained by the renorm-native team.
+
+---
+
+# 🧩 Enterprise / Production Add-On Section
+
+---
+
+## 🏢 Enterprise / Production Usage
+
+`renorm-native` can be used in production systems requiring deterministic numerical stability under high load.
+
+Typical deployment environments:
+
+* GPU inference clusters (CUDA-enabled)
+* On-prem ML pipelines
+* Edge inference systems
+* Distributed training environments (PyTorch DDP)
+
+---
+
+## 🔐 Enterprise License Mode (Optional)
+
+Some builds may enable enterprise validation for regulated or production deployments.
+
+### Environment Variable
+
+```bash
+export RENORM_ENTERPRISE_KEY="your_token_here"
+```
+
+### Format
+
+```
+base64_payload.hex_hmac_signature
+```
+
+### Programmatic Validation
+
+```python
+from renorm.auth import check_enterprise_license
+
+check_enterprise_license()
+```
+
+### Failure Modes
+
+| Condition         | Behavior               |
+| ----------------- | ---------------------- |
+| Missing key       | Raises PermissionError |
+| Invalid signature | Raises PermissionError |
+| Expired token     | Raises TimeoutError    |
+
+---
+
+## ⚙️ Production Integration Pattern
+
+Recommended structure in production pipelines:
+
+```python
+import torch
+from renorm import RenormTransformerLayer
+
+def build_model():
+    model = RenormTransformerLayer(dim=1024, heads=16)
+    return model
+
+def forward_pass(model, x):
+    return model(x)
+```
+
+---
+
+## 🧪 CI / Validation Test
+
+Run a deterministic sanity check:
+
+```bash
+python -c "
+import torch
+from renorm import RenormTransformerLayer
+
+layer = RenormTransformerLayer(dim=256, heads=4)
+x = torch.randn(2, 8, 256)
+y = layer(x)
+
+assert y.shape[-1] == 256
+print('OK')
+"
+```
+
+---
+
+## 📊 Performance Notes
+
+`renorm-native` is optimized for:
+
+* Stable forward/backward propagation under long sequence lengths
+* Reduced numerical drift in deep stacks
+* Consistent execution across heterogeneous compute backends
+
+It is not intended as a raw speed-optimized kernel replacement for PyTorch primitives.
+
+---
+
+## 🔄 Compatibility Matrix
+
+| Environment                | Status          |
+| -------------------------- | --------------- |
+| CPU (Windows)              | ✅ Supported     |
+| CPU (Linux)                | ✅ Supported     |
+| CUDA 11+                   | ✅ Supported     |
+| MPS (Apple Silicon)        | ⚠️ Experimental |
+| Distributed training (DDP) | ✅ Compatible    |
+
+---
+
+## 🧠 Design Philosophy
+
+`renorm-native` prioritizes:
+
+* Numerical correctness over raw speed
+* Stability over aggressive optimization
+* Cross-device consistency over hardware specialization
+
+It is designed to behave predictably under:
+
+* gradient explosion conditions
+* low precision arithmetic
+* fragmented tensor memory layouts
+
+---
+
+## 📦 Recommended Deployment (Docker)
+
+```dockerfile
+FROM pytorch/pytorch:2.2.0-cuda11.8-cudnn8-runtime
+
+WORKDIR /app
+
+RUN pip install renorm-native
+
+COPY . .
+
+CMD ["python", "main.py"]
+```
+
+---
+
+## 📈 Benchmark (Example Placeholder)
+
+| Layer              | Stability Score | NaN Rate            |
+| ------------------ | --------------- | ------------------- |
+| torch.nn.LayerNorm | baseline        | medium under stress |
+| renorm-native      | improved        | near-zero           |
+
+*(Replace with your real measured results when ready — do NOT leave as-is in final production release if publishing publicly.)*
+
+---
+
+## 🌐 Roadmap
+
+Planned improvements:
+
+* Distributed kernel optimization (multi-GPU aware routing)
+* Expanded attention primitives
+* Quantization-aware renormalization mode
+* Torch compile integration (torch.compile support)
+
+---
+
+## 📩 Support
+
+For production integration or enterprise deployment:
+
+* GitHub Issues: https://github.com/Tobi-Adesoye/renorm-native
+* Contact: Adesoyetobe@gmail.com
+
