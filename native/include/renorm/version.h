@@ -1,0 +1,7 @@
+#pragma once
+
+#define RENORM_VERSION_MAJOR 1
+#define RENORM_VERSION_MINOR 0
+#define RENORM_VERSION_PATCH 0
+
+#define RENORM_VERSION "1.0.0"
